@@ -1,0 +1,64 @@
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+    id 'signing'
+}
+
+allprojects {
+    group = 'io.github.ensgijs'
+    version = '1.0.0-SNAPSHOT'
+
+    repositories {
+        mavenCentral()
+        maven { url = 'https://repo.papermc.io/repository/maven-public/' }
+    }
+}
+
+subprojects {
+    apply plugin: 'java-library'
+    apply plugin: 'maven-publish'
+    apply plugin: 'signing'
+
+    java {
+        withJavadocJar()
+        withSourcesJar()
+        toolchain.languageVersion = JavaLanguageVersion.of(21)
+    }
+
+    // Maven Central Requirements
+    publishing {
+        publications {
+            mavenJava(MavenPublication) {
+                from components.java
+                pom {
+                    name = project.name
+                    description = 'A platform-agnostic Database & Repository Manager'
+                    url = 'https://github.com/ensgijs/dbm-eternal'
+                    licenses {
+                        license {
+                            name = 'Apache 2.0'
+                            url = 'https://opensource.org/licenses/apache-2.0'
+                        }
+                    }
+                    developers {
+                        developer {
+                            id = 'ens-gijs'
+                            name = 'Ens Gijs (Ross)'
+                        }
+                    }
+                    scm {
+                        connection = 'scm:git:git://github.com/ens-gijs/dbm-eternal.git'
+                        developerConnection = 'scm:git:ssh://github.com/ens-gijs/dbm-eternal.git'
+                        url = 'https://github.com/ens-gijs/dbm-eternal'
+                    }
+                }
+            }
+        }
+    }
+
+    signing {
+        // This makes signing optional for local builds but required for releases
+        required { gradle.taskGraph.hasTask("publish") }
+        sign publishing.publications.mavenJava
+    }
+}

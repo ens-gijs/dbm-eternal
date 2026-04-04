@@ -1,0 +1,6 @@
+rootProject.name = 'dbm-eternal'
+
+include 'dbm-core'
+include 'dbm-sql'
+include 'dbm-platform-paper'
+include 'dbm-platform-velocity'

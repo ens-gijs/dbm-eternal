@@ -1,0 +1,1 @@
+Multi-Platform SQL DB Manager with Repository & Migration Managers.
