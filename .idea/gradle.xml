@@ -4,53 +4,12 @@
     <option name="linkedExternalProjectsSettings">
       <GradleProjectSettings>
         <option name="externalProjectPath" value="$PROJECT_DIR$" />
-        <option name="gradleJvm" value="21" />
         <option name="modules">
           <set>
             <option value="$PROJECT_DIR$" />
             <option value="$PROJECT_DIR$/dbm-core" />
             <option value="$PROJECT_DIR$/dbm-platform-paper" />
             <option value="$PROJECT_DIR$/dbm-platform-velocity" />
-            <option value="$PROJECT_DIR$/dbm-sql" />
-          </set>
-        </option>
-      </GradleProjectSettings>
-      <GradleProjectSettings>
-        <option name="externalProjectPath" value="$PROJECT_DIR$/dbm-core" />
-        <option name="gradleHome" value="" />
-        <option name="gradleJvm" value="21" />
-        <option name="modules">
-          <set>
-            <option value="$PROJECT_DIR$/dbm-core" />
-          </set>
-        </option>
-      </GradleProjectSettings>
-      <GradleProjectSettings>
-        <option name="externalProjectPath" value="$PROJECT_DIR$/dbm-platform-paper" />
-        <option name="gradleHome" value="" />
-        <option name="gradleJvm" value="21" />
-        <option name="modules">
-          <set>
-            <option value="$PROJECT_DIR$/dbm-platform-paper" />
-          </set>
-        </option>
-      </GradleProjectSettings>
-      <GradleProjectSettings>
-        <option name="externalProjectPath" value="$PROJECT_DIR$/dbm-platform-velocity" />
-        <option name="gradleHome" value="" />
-        <option name="gradleJvm" value="21" />
-        <option name="modules">
-          <set>
-            <option value="$PROJECT_DIR$/dbm-platform-velocity" />
-          </set>
-        </option>
-      </GradleProjectSettings>
-      <GradleProjectSettings>
-        <option name="externalProjectPath" value="$PROJECT_DIR$/dbm-sql" />
-        <option name="gradleHome" value="" />
-        <option name="gradleJvm" value="21" />
-        <option name="modules">
-          <set>
             <option value="$PROJECT_DIR$/dbm-sql" />
           </set>
         </option>
