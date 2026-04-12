@@ -36,14 +36,12 @@ import java.util.stream.Collectors;
  *     Required for {@code .sql} files; must be absent for {@code .run} files.</li>
  * <li>{@code ext} — {@code sql} for raw SQL migrations or {@code run} for programmatic migrations.</li>
  * </ul>
- * </p>
  * <p>
  * Dependency directives ({@code !AFTER}) may be placed at the top of any migration file
  * before the first statement:
  * <pre>
  *   -- !AFTER: core.20240101
  * </pre>
- * </p>
  * <p>
  * Results are cached per plugin name. The global master migration list is updated with each
  * {@link #loadMigrations} call, making all loaded migrations available to

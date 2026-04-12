@@ -1,133 +1,208 @@
 package io.github.ensgijs.dbm.sql;
 
-import io.github.ensgijs.dbm.platform.SimplePlatformHandle;
+import com.zaxxer.hikari.HikariConfig;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import java.io.File;
-import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class SqlConnectionConfigTest {
 
-    private static final SimplePlatformHandle PLATFORM =
-            new SimplePlatformHandle("test", new File("/data"), List.of());
+    // ---- MySqlConnectionConfig ----
 
-    // ---- getDbUrl ----
+    @Nested
+    class MySqlTests {
 
-    @Test
-    void getDbUrl_mysql_buildsJdbcUrl() {
-        SqlConnectionConfig cfg = new SqlConnectionConfig(
-                SqlDialect.MYSQL, "mydb", 5, "db.example.com", 3306, "user", "pass");
-        String url = cfg.getDbUrl(PLATFORM);
-        assertTrue(url.startsWith("jdbc:mysql://db.example.com:3306/mydb"),
-                "URL should contain host:port/db — was: " + url);
-        assertTrue(url.contains("rewriteBatchedStatements=true"),
-                "MySQL URL should include rewriteBatchedStatements");
+        @Test
+        void getDbUrl_buildsJdbcUrl() {
+            MySqlConnectionConfig cfg = new MySqlConnectionConfig(
+                    "db.example.com", 3306, "mydb", 5, "user", "pass");
+            String url = cfg.getDbUrl();
+            assertTrue(url.startsWith("jdbc:mysql://db.example.com:3306/mydb"),
+                    "URL should contain host:port/db — was: " + url);
+            assertTrue(url.contains("rewriteBatchedStatements=true"),
+                    "MySQL URL should include rewriteBatchedStatements");
+        }
+
+        @Test
+        void configurePool_setsDriverAndCreds() {
+            MySqlConnectionConfig cfg = new MySqlConnectionConfig(
+                    "localhost", 3306, "mydb", 5, "root", "secret");
+            HikariConfig hc = new HikariConfig();
+            cfg.configurePool(hc);
+            assertEquals("com.mysql.cj.jdbc.Driver", hc.getDriverClassName());
+            assertEquals("root", hc.getUsername());
+            assertEquals("secret", hc.getPassword());
+            assertEquals(5, hc.getMaximumPoolSize());
+            assertEquals("true", hc.getDataSourceProperties().getProperty("cachePrepStmts"));
+            assertEquals("true", hc.getDataSourceProperties().getProperty("useServerPrepStmts"));
+        }
+
+        @Test
+        void constructor_clampsMaxConnectionsBelowOne() {
+            MySqlConnectionConfig cfg0 = new MySqlConnectionConfig("h", 3306, "db", 0, "u", "p");
+            assertEquals(1, cfg0.maxConnections(), "maxConnections=0 should be clamped to 1");
+
+            MySqlConnectionConfig cfgNeg = new MySqlConnectionConfig("h", 3306, "db", -5, "u", "p");
+            assertEquals(1, cfgNeg.maxConnections(), "Negative maxConnections should be clamped to 1");
+        }
+
+        @Test
+        void dialect_returnsMysql() {
+            MySqlConnectionConfig cfg = new MySqlConnectionConfig("h", 3306, "db", 1, "u", "p");
+            assertEquals(SqlDialect.MYSQL, cfg.dialect());
+        }
+
+        @Test
+        void connectionId_containsUserAndHost() {
+            MySqlConnectionConfig cfg = new MySqlConnectionConfig("myhost", 3306, "mydb", 1, "admin", "p");
+            String id = cfg.connectionId();
+            assertTrue(id.contains("admin"), "connectionId should contain username");
+            assertTrue(id.contains("myhost"), "connectionId should contain host");
+        }
+
+        @Test
+        void isEquivalent_nullReturnsFalse() {
+            MySqlConnectionConfig cfg = new MySqlConnectionConfig("h", 3306, "db", 1, "u", "p");
+            assertFalse(cfg.isEquivalent(null));
+        }
+
+        @Test
+        void isEquivalent_differentTypeReturnsFalse() {
+            MySqlConnectionConfig mysql = new MySqlConnectionConfig("h", 3306, "db", 1, "u", "p");
+            SqliteConnectionConfig sqlite = new SqliteConnectionConfig(new File("/data/db.db"));
+            assertFalse(mysql.isEquivalent(sqlite));
+        }
+
+        @Test
+        void isEquivalent_comparesAllFields() {
+            MySqlConnectionConfig base = new MySqlConnectionConfig("host", 3306, "db", 5, "user", "pass");
+
+            assertTrue(base.isEquivalent(
+                    new MySqlConnectionConfig("host", 3306, "db", 5, "user", "pass")));
+
+            assertFalse(base.isEquivalent(
+                    new MySqlConnectionConfig("other", 3306, "db", 5, "user", "pass")),
+                    "Different host should not be equivalent");
+            assertFalse(base.isEquivalent(
+                    new MySqlConnectionConfig("host", 3307, "db", 5, "user", "pass")),
+                    "Different port should not be equivalent");
+            assertFalse(base.isEquivalent(
+                    new MySqlConnectionConfig("host", 3306, "other", 5, "user", "pass")),
+                    "Different database should not be equivalent");
+            assertFalse(base.isEquivalent(
+                    new MySqlConnectionConfig("host", 3306, "db", 10, "user", "pass")),
+                    "Different maxConnections should not be equivalent");
+            assertFalse(base.isEquivalent(
+                    new MySqlConnectionConfig("host", 3306, "db", 5, "other", "pass")),
+                    "Different username should not be equivalent");
+            assertFalse(base.isEquivalent(
+                    new MySqlConnectionConfig("host", 3306, "db", 5, "user", "other")),
+                    "Different password should not be equivalent");
+        }
+
+        @Test
+        void toString_showsAllFields() {
+            MySqlConnectionConfig cfg = new MySqlConnectionConfig("127.0.0.1", 3306, "mydb", 5, "root", "secret");
+            String s = cfg.toString();
+            assertTrue(s.contains("MySQL") || s.contains("MYSQL"), "toString should include dialect");
+            assertTrue(s.contains("mydb"), "toString should include database name");
+            assertTrue(s.contains("127.0.0.1"), "toString should include host");
+            assertTrue(s.contains("3306"), "toString should include port");
+            assertTrue(s.contains("root"), "toString should include username");
+            assertFalse(s.contains("secret"), "toString should mask password");
+            assertTrue(s.contains("*"), "toString should show asterisks for non-empty password");
+        }
+
+        @Test
+        void toString_emptyPassword_showsEmpty() {
+            MySqlConnectionConfig cfg = new MySqlConnectionConfig("h", 3306, "db", 1, "u", "");
+            String s = cfg.toString();
+            assertFalse(s.contains("*"), "Empty password should not show asterisks");
+        }
     }
 
-    @Test
-    void getDbUrl_sqlite_buildsFilePathUrl() {
-        SqlConnectionConfig cfg = new SqlConnectionConfig(
-                SqlDialect.SQLITE, "mydb", 1, null, 0, null, null);
-        String url = cfg.getDbUrl(PLATFORM);
-        assertTrue(url.startsWith("jdbc:sqlite:"), "URL should use jdbc:sqlite: scheme — was: " + url);
-        assertTrue(url.contains("mydb.db"), "SQLite URL should contain database file name — was: " + url);
-        assertTrue(url.contains("journal_mode=WAL"), "SQLite URL should set WAL mode — was: " + url);
-    }
+    // ---- SqliteConnectionConfig ----
 
-    // ---- maxConnections clamping ----
+    @Nested
+    class SqliteTests {
 
-    @Test
-    void constructor_clampsMaxConnectionsBelowOne() {
-        SqlConnectionConfig cfg = new SqlConnectionConfig(SqlDialect.MYSQL, "db", 0, "h", 3306, "u", "p");
-        assertEquals(1, cfg.maxConnections(), "maxConnections below 1 should be clamped to 1");
+        @Test
+        void getDbUrl_buildsFilePathUrl() {
+            SqliteConnectionConfig cfg = new SqliteConnectionConfig(new File("/data/mydb.db"));
+            String url = cfg.getDbUrl();
+            assertTrue(url.startsWith("jdbc:sqlite:"), "URL should use jdbc:sqlite: scheme — was: " + url);
+            assertTrue(url.contains("mydb.db"), "SQLite URL should contain database file name — was: " + url);
+            assertTrue(url.contains("journal_mode=WAL"), "SQLite URL should set WAL mode — was: " + url);
+        }
 
-        SqlConnectionConfig cfg2 = new SqlConnectionConfig(SqlDialect.MYSQL, "db", -5, "h", 3306, "u", "p");
-        assertEquals(1, cfg2.maxConnections(), "Negative maxConnections should be clamped to 1");
-    }
+        @Test
+        void of_appendsDbExtension() {
+            File folder = new File("/data");
+            SqliteConnectionConfig cfg = SqliteConnectionConfig.of(folder, "mydb");
+            assertTrue(cfg.file().getName().endsWith(".db"),
+                    "of() factory should append .db extension");
+            assertEquals("mydb.db", cfg.file().getName());
+        }
 
-    // ---- isEquivalent ----
+        @Test
+        void configurePool_setsDriverAndPoolSizeOne() {
+            SqliteConnectionConfig cfg = new SqliteConnectionConfig(new File("/data/mydb.db"));
+            HikariConfig hc = new HikariConfig();
+            cfg.configurePool(hc);
+            assertEquals("org.sqlite.JDBC", hc.getDriverClassName());
+            assertEquals(1, hc.getMaximumPoolSize());
+        }
 
-    @Test
-    void isEquivalent_nullReturnsFalse() {
-        SqlConnectionConfig cfg = new SqlConnectionConfig(SqlDialect.SQLITE, "db", 1, null, 0, null, null);
-        assertFalse(cfg.isEquivalent(null));
-    }
+        @Test
+        void maxConnections_alwaysOne() {
+            SqliteConnectionConfig cfg = new SqliteConnectionConfig(new File("/data/mydb.db"));
+            assertEquals(1, cfg.maxConnections());
+        }
 
-    @Test
-    void isEquivalent_differentDialectReturnsFalse() {
-        SqlConnectionConfig a = new SqlConnectionConfig(SqlDialect.SQLITE, "db", 1, null, 0, null, null);
-        SqlConnectionConfig b = new SqlConnectionConfig(SqlDialect.MYSQL, "db", 1, "h", 3306, "u", "p");
-        assertFalse(a.isEquivalent(b));
-    }
+        @Test
+        void dialect_returnsSqlite() {
+            SqliteConnectionConfig cfg = new SqliteConnectionConfig(new File("/data/mydb.db"));
+            assertEquals(SqlDialect.SQLITE, cfg.dialect());
+        }
 
-    @Test
-    void isEquivalent_sqlite_onlyComparesDatabase() {
-        SqlConnectionConfig a = new SqlConnectionConfig(SqlDialect.SQLITE, "db", 1, null, 0, null, null);
-        SqlConnectionConfig b = new SqlConnectionConfig(SqlDialect.SQLITE, "db", 99, "ignored", 9999, "x", "y");
-        assertTrue(a.isEquivalent(b), "SQLite equivalence should only check database name");
+        @Test
+        void isEquivalent_nullReturnsFalse() {
+            SqliteConnectionConfig cfg = new SqliteConnectionConfig(new File("/data/mydb.db"));
+            assertFalse(cfg.isEquivalent(null));
+        }
 
-        SqlConnectionConfig c = new SqlConnectionConfig(SqlDialect.SQLITE, "other", 1, null, 0, null, null);
-        assertFalse(a.isEquivalent(c));
-    }
+        @Test
+        void isEquivalent_differentTypeReturnsFalse() {
+            SqliteConnectionConfig sqlite = new SqliteConnectionConfig(new File("/data/db.db"));
+            MySqlConnectionConfig mysql = new MySqlConnectionConfig("h", 3306, "db", 1, "u", "p");
+            assertFalse(sqlite.isEquivalent(mysql));
+        }
 
-    @Test
-    void isEquivalent_mysql_comparesAllRelevantFields() {
-        SqlConnectionConfig base = new SqlConnectionConfig(SqlDialect.MYSQL, "db", 5, "host", 3306, "user", "pass");
+        @Test
+        void isEquivalent_comparesAbsolutePath() {
+            SqliteConnectionConfig a = new SqliteConnectionConfig(new File("/data/mydb.db"));
+            SqliteConnectionConfig b = new SqliteConnectionConfig(new File("/data/mydb.db"));
+            SqliteConnectionConfig c = new SqliteConnectionConfig(new File("/data/other.db"));
+            assertTrue(a.isEquivalent(b), "Same path should be equivalent");
+            assertFalse(a.isEquivalent(c), "Different path should not be equivalent");
+        }
 
-        assertTrue(base.isEquivalent(
-                new SqlConnectionConfig(SqlDialect.MYSQL, "db", 5, "host", 3306, "user", "pass")));
+        @Test
+        void toString_showsFileAndDialect() {
+            SqliteConnectionConfig cfg = new SqliteConnectionConfig(new File("/data/mydb.db"));
+            String s = cfg.toString();
+            assertTrue(s.contains("SQLite") || s.contains("SQLITE"), "toString should include dialect");
+            assertTrue(s.contains("mydb.db"), "toString should include file name");
+            assertFalse(s.contains("host"), "SQLite toString should not mention host");
+            assertFalse(s.contains("port"), "SQLite toString should not mention port");
+        }
 
-        assertFalse(base.isEquivalent(
-                new SqlConnectionConfig(SqlDialect.MYSQL, "other", 5, "host", 3306, "user", "pass")),
-                "Different database should not be equivalent");
-        assertFalse(base.isEquivalent(
-                new SqlConnectionConfig(SqlDialect.MYSQL, "db", 5, "other-host", 3306, "user", "pass")),
-                "Different host should not be equivalent");
-        assertFalse(base.isEquivalent(
-                new SqlConnectionConfig(SqlDialect.MYSQL, "db", 5, "host", 3307, "user", "pass")),
-                "Different port should not be equivalent");
-        assertFalse(base.isEquivalent(
-                new SqlConnectionConfig(SqlDialect.MYSQL, "db", 10, "host", 3306, "user", "pass")),
-                "Different maxConnections should not be equivalent");
-        assertFalse(base.isEquivalent(
-                new SqlConnectionConfig(SqlDialect.MYSQL, "db", 5, "host", 3306, "other", "pass")),
-                "Different username should not be equivalent");
-        assertFalse(base.isEquivalent(
-                new SqlConnectionConfig(SqlDialect.MYSQL, "db", 5, "host", 3306, "user", "other")),
-                "Different password should not be equivalent");
-    }
-
-    // ---- toString ----
-
-    @Test
-    void toString_sqlite_doesNotShowMysqlFields() {
-        SqlConnectionConfig cfg = new SqlConnectionConfig(SqlDialect.SQLITE, "mydb", 1, null, 0, null, null);
-        String s = cfg.toString();
-        assertTrue(s.contains("SQLITE") || s.contains("SQLite"), "toString should include dialect");
-        assertTrue(s.contains("mydb"), "toString should include database name");
-        assertFalse(s.contains("host"), "SQLite toString should not mention host");
-        assertFalse(s.contains("port"), "SQLite toString should not mention port");
-    }
-
-    @Test
-    void toString_mysql_showsAllFields() {
-        SqlConnectionConfig cfg = new SqlConnectionConfig(SqlDialect.MYSQL, "mydb", 5, "127.0.0.1", 3306, "root", "secret");
-        String s = cfg.toString();
-        assertTrue(s.contains("MySQL") || s.contains("MYSQL"), "toString should include dialect");
-        assertTrue(s.contains("mydb"), "toString should include database name");
-        assertTrue(s.contains("127.0.0.1"), "toString should include host");
-        assertTrue(s.contains("3306"), "toString should include port");
-        assertTrue(s.contains("root"), "toString should include username");
-        assertFalse(s.contains("secret"), "toString should mask password");
-        assertTrue(s.contains("*"), "toString should show asterisks for non-empty password");
-    }
-
-    @Test
-    void toString_mysql_emptyPassword_showsEmpty() {
-        SqlConnectionConfig cfg = new SqlConnectionConfig(SqlDialect.MYSQL, "db", 1, "h", 3306, "u", "");
-        String s = cfg.toString();
-        assertFalse(s.contains("*"), "Empty password should not show asterisks");
+        @Test
+        void constructor_nullFileThrows() {
+            assertThrows(NullPointerException.class, () -> new SqliteConnectionConfig(null));
+        }
     }
 }

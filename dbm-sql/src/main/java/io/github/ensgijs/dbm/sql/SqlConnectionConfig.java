@@ -1,125 +1,74 @@
 package io.github.ensgijs.dbm.sql;
 
-import io.github.ensgijs.dbm.platform.PlatformHandle;
-
-import java.io.File;
-import java.util.Objects;
+import com.zaxxer.hikari.HikariConfig;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 /**
- * Immutable configuration for a SQL database connection.
+ * Encapsulates everything needed to connect to a SQL database and initialize a HikariCP pool.
  * <p>
- * Holds all the parameters needed to initialize a HikariCP connection pool for either
- * a MySQL or SQLite database. MySQL-specific fields ({@code host}, {@code port},
- * {@code username}, {@code password}, {@code maxConnections}) are ignored when the
- * dialect is {@link SqlDialect#SQLITE}.
+ * Rather than carrying all possible fields for every dialect in one flat structure, this
+ * interface lets each dialect expose only the fields relevant to it:
  * </p>
- *
- * @param sqlDialect     The database dialect. Must not be {@link SqlDialect#UNDEFINED}.
- * @param database       The database (or file base name for SQLite). Required.
- * @param maxConnections Maximum pool size for MySQL. Values below 1 are clamped to 1. Ignored for SQLite.
- * @param host           MySQL server hostname. Ignored for SQLite.
- * @param port           MySQL server port. Ignored for SQLite.
- * @param username       MySQL username. Ignored for SQLite.
- * @param password       MySQL password. Ignored for SQLite.
+ * <ul>
+ * <li>{@link MySqlConnectionConfig} — MySQL (or compatible) server connections.</li>
+ * <li>{@link SqliteConnectionConfig} — SQLite file-based connections.</li>
+ * </ul>
+ * <p>
+ * Implement this interface to add support for a new dialect. See {@link SqlDialect} for
+ * the complete list of additional touch-points that must be updated alongside a new implementation.
+ * </p>
  */
-public record SqlConnectionConfig (
-        SqlDialect sqlDialect,
-        String database,
-        int maxConnections,
-        String host,
-        int port,
-        String username,
-        String password
-) {
-
-    public SqlConnectionConfig (
-            SqlDialect sqlDialect,
-            String database,
-            int maxConnections,
-            String host,
-            int port,
-            String username,
-            String password
-    ) {
-        this.sqlDialect = sqlDialect;
-        this.database = database;
-        this.maxConnections = Math.max(1, maxConnections);
-        this.host = host;
-        this.port = port;
-        this.username = username;
-        this.password = password;
-    }
+public interface SqlConnectionConfig {
 
     /**
-     * Builds the JDBC connection URL for this configuration.
+     * @return The fully-qualified JDBC connection URL for this configuration.
+     */
+    @NotNull String getDbUrl();
+
+    /**
+     * Applies all driver-specific and pool-specific settings to the provided
+     * {@link HikariConfig}. This includes the JDBC URL, driver class name,
+     * credentials, maximum pool size, and any performance-tuning data-source properties.
      * <p>
-     * For SQLite, the database file is resolved relative to
-     * {@link PlatformHandle#dataFolder()} as {@code <dataFolder>/<database>.db}.
+     * {@link SqlClient} calls this method during pool initialization. Custom implementations
+     * may set any additional Hikari properties needed for their driver.
      * </p>
      *
-     * @param platformHandle Used to resolve the data folder for SQLite file paths.
-     * @return A fully qualified JDBC URL ready for use with HikariCP.
+     * @param config The HikariCP configuration to populate. Must not be null.
      */
-    public String getDbUrl(PlatformHandle platformHandle) {
-        if (sqlDialect == SqlDialect.MYSQL) {
-            // rewriteBatchedStatements=true
-            //   Without this, the MySQL driver sends each batch entry as a separate packet. With this enabled,
-            //   the driver bundles them into a single INSERT INTO ... VALUES (...), (...), (...) string, which
-            //   is exponentially faster.
-            return "jdbc:mysql://" + host + ":" + port + "/" + database + "?autoReconnect=true&rewriteBatchedStatements=true";
-        } else {
-            // Use the plugin's data folder to ensure the path is correct in all environments
-            File dbFile = new File(platformHandle.dataFolder(), database + ".db");
-            // journal_mode=WAL
-            //   Enable Write-Ahead Logging (WAL) mode. This allows multiple readers and one writer to work
-            //   simultaneously without blocking, and significantly increases write throughput.
-            // synchronous=NORMAL
-            //   Performance: Setting the mode to NORMAL significantly improves write performance compared to the
-            //    default FULL mode because it reduces the number of times the database engine pauses to ensure
-            //    data is written to the disk surface (fsync operations).
-            //   Durability Trade-off: In NORMAL mode, SQLite synchronizes at "critical moments," but less often
-            //    than in FULL mode.
-            //    Application Crash: Data is still safe if the application itself crashes.
-            //    Power Failure/OS Crash: There is a small chance that the most recent transactions might be
-            //     rolled back and data lost following a power failure or hard operating system crash.
-            //     The database, however, is guaranteed not to be corrupted.
-            return "jdbc:sqlite:" + dbFile.getAbsolutePath() + "?journal_mode=WAL&synchronous=NORMAL";
-        }
-    }
-
-    @Override
-    public String toString() {
-        if (sqlDialect == SqlDialect.SQLITE) {
-            return "[" + sqlDialect + "]\n" +
-                    "database: " + database;
-        }
-        return "[" + sqlDialect + "]\n" +
-                "database: " + database + "\n" +
-                "max-connections: " + maxConnections + "\n" +
-                "host: " + host + "\n" +
-                "port: " + port + "\n" +
-                "username: " + username + "\n" +
-                "password: " + (password != null && !password.isEmpty() ? "********" : "");
-    }
+    void configurePool(@NotNull HikariConfig config);
 
     /**
-     * Similar to {@link #equals(Object)} but only compares fields that are meaningful for the
-     * configured dialect. For SQLite only the database name is compared; for MySQL all fields
-     * are compared.
-     *
-     * @param that The other config to compare against.
-     * @return {@code true} if both configs would connect to the same database with the same settings.
+     * @return Maximum number of connections in the pool. For SQLite this is always {@code 1}.
+     *         Used by {@link SqlClient} to calibrate async executor concurrency.
      */
-    public boolean isEquivalent(SqlConnectionConfig that) {
-        if (that == null || this.sqlDialect != that.sqlDialect) return false;
-        if (this.sqlDialect == SqlDialect.SQLITE) {
-            return this.database.equals(that.database);
-        }
-        return  Objects.equals(database, that.database)
-                && port == that.port
-                && maxConnections == that.maxConnections
-                && Objects.equals(host, that.host)
-                && Objects.equals(username, that.username)
-                && Objects.equals(password, that.password);
-    }
+    int maxConnections();
+
+    /**
+     * @return The SQL dialect this connection speaks.
+     */
+    @NotNull SqlDialect dialect();
+
+    /**
+     * Returns a short, human-readable identifier for this connection, used in pool names
+     * and log messages. The dialect is included separately by the caller, so this should
+     * return only connection-specific details.
+     *
+     * <p>Examples: {@code "user%host/database"} for MySQL,
+     * {@code "/var/data/mydb.db"} for SQLite.</p>
+     *
+     * @return A compact connection identifier.
+     */
+    @NotNull String connectionId();
+
+    /**
+     * Dialect-aware equivalence check. Returns {@code true} if both configs represent the
+     * same effective connection with the same settings. Used by {@link SqlClient} to
+     * determine whether the pool needs to be rebuilt when the config is updated.
+     *
+     * @param other The other config to compare against. May be {@code null}.
+     * @return {@code true} if equivalent; {@code false} otherwise.
+     */
+    boolean isEquivalent(@Nullable SqlConnectionConfig other);
 }

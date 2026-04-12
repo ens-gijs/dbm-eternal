@@ -4,6 +4,7 @@ import io.github.ensgijs.dbm.repository.Repository;
 import io.github.ensgijs.dbm.repository.RepositoryApi;
 import org.junit.jupiter.api.Test;
 
+import java.io.File;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -14,7 +15,7 @@ class DbmConfigTest {
     private interface FakeRepo extends Repository {}
 
     private static final SqlConnectionConfig SQLITE_CFG =
-            new SqlConnectionConfig(SqlDialect.SQLITE, "test", 1, null, 0, null, null);
+            new SqliteConnectionConfig(new File("/data/test.db"));
 
     // ---- single-arg constructor ----
 

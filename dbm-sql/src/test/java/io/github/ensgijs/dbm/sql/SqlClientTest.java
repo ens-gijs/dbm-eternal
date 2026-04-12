@@ -6,6 +6,7 @@ import io.github.ensgijs.dbm.platform.PlatformHandle;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.*;
 
+import java.io.File;
 import java.sql.Connection;
 import java.sql.ParameterMetaData;
 import java.sql.PreparedStatement;
@@ -46,9 +47,7 @@ public class SqlClientTest {
         when(mockPs.getParameterMetaData()).thenReturn(mockMetaData);
         when(mockMetaData.getParameterCount()).thenReturn(2);
 
-        connConfig = new SqlConnectionConfig(
-                SqlDialect.MYSQL, "MockedTestDb",
-                6, "10.0.50.99", 1324, "rot", "tot42");
+        connConfig = new MySqlConnectionConfig("10.0.50.99", 1324, "MockedTestDb", 6, "rot", "tot42");
     }
 
     @Nested
@@ -58,9 +57,8 @@ public class SqlClientTest {
         @Test
         @DisplayName("Should configure MySQL with performance properties")
         void testMySQLInitialization() {
-            SqlConnectionConfig mockConfig = new SqlConnectionConfig(
-                    SqlDialect.MYSQL, "MockedTestDb",
-                    6, "10.0.50.99", 1324, "rot", "tot42");
+            SqlConnectionConfig mockConfig = new MySqlConnectionConfig(
+                    "10.0.50.99", 1324, "MockedTestDb", 6, "rot", "tot42");
 
             SqlClient client = new SqlClient(mockPlatformHandle, mockConfig, mockHikariCreator);
 
@@ -78,9 +76,7 @@ public class SqlClientTest {
         @Test
         @DisplayName("Should force SQLite pool size to 1")
         void testSQLiteInitialization() {
-            SqlConnectionConfig mockConfig = new SqlConnectionConfig(
-                    SqlDialect.SQLITE, "MockedTestDb",
-                    6, null, 0, null, null);
+            SqlConnectionConfig mockConfig = new SqliteConnectionConfig(new File("/data/MockedTestDb.db"));
 
             SqlClient client = new SqlClient(mockPlatformHandle, mockConfig, mockHikariCreator);
 
@@ -101,9 +97,7 @@ public class SqlClientTest {
             SqlClient client = new SqlClient(mockPlatformHandle, connConfig, mockHikariCreator);
             clearInvocations(mockHikariCreator);
 
-            connConfig = new SqlConnectionConfig(
-                    SqlDialect.MYSQL, "MockedTestDb",
-                    6, "10.0.50.99", 1324, "rot", "tot42");
+            connConfig = new MySqlConnectionConfig("10.0.50.99", 1324, "MockedTestDb", 6, "rot", "tot42");
             client.setSqlConnectionConfig(connConfig);
 
             verify(mockDataSource, never()).close();
@@ -116,9 +110,7 @@ public class SqlClientTest {
             SqlClient client = new SqlClient(mockPlatformHandle, connConfig, mockHikariCreator);
             clearInvocations(mockHikariCreator);
 
-            connConfig = new SqlConnectionConfig(
-                    SqlDialect.MYSQL, "MockedTestDbV2",
-                    6, "10.0.50.99", 1324, "rot", "tot42");
+            connConfig = new MySqlConnectionConfig("10.0.50.99", 1324, "MockedTestDbV2", 6, "rot", "tot42");
             client.setSqlConnectionConfig(connConfig);
             verify(mockDataSource).close(); // Closes the old one
             verify(mockHikariCreator, times(1)).apply(any());

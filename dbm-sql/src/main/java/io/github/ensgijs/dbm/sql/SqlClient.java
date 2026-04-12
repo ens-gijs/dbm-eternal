@@ -58,7 +58,7 @@ public class SqlClient {
         return "SqlClient{" +
                 "owner=" + platformHandle.name() +
                 ", dialect=" + activeDialect +
-                ", db=" + sqlConnectionConfig.database() +
+                ", conn=" + sqlConnectionConfig.connectionId() +
                 '}';
     }
 
@@ -129,46 +129,26 @@ public class SqlClient {
             }
             dataSource.close();
         }
-        activeDialect = sqlConnectionConfig.sqlDialect();
+        activeDialect = sqlConnectionConfig.dialect();
         if (activeDialect == SqlDialect.UNDEFINED) {
             logger.severe("Invalid syntax mode, DB will not be available!");
             return;
         }
 
         HikariConfig hikariConfig = new HikariConfig();
-        hikariConfig.setJdbcUrl(sqlConnectionConfig.getDbUrl(platformHandle));
+        sqlConnectionConfig.configurePool(hikariConfig);
 
-        if (activeDialect == SqlDialect.MYSQL) {
-            hikariConfig.setUsername(sqlConnectionConfig.username());
-            hikariConfig.setPassword(sqlConnectionConfig.password());
-            hikariConfig.setDriverClassName("com.mysql.cj.jdbc.Driver");
-            // High-performance MySQL settings
-            hikariConfig.addDataSourceProperty("cachePrepStmts", "true");
-            hikariConfig.addDataSourceProperty("prepStmtCacheSize", "250");
-            hikariConfig.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
-            hikariConfig.addDataSourceProperty("useServerPrepStmts", "true");
-            hikariConfig.setMaximumPoolSize(sqlConnectionConfig.maxConnections());
-            if (sqlConnectionConfig.maxConnections() <= 2) {
-                asyncExecutor.setMaxConcurrency(1);
-            } else if (sqlConnectionConfig.maxConnections() <= 4) {
-                asyncExecutor.setMaxConcurrency(2);
-            } else {
-                asyncExecutor.setMaxConcurrency(sqlConnectionConfig.maxConnections() - 2);
-            }
-        } else if (activeDialect == SqlDialect.SQLITE) {
-            hikariConfig.setDriverClassName("org.sqlite.JDBC");
-            hikariConfig.setMaximumPoolSize(1);
+        int maxConns = sqlConnectionConfig.maxConnections();
+        if (maxConns <= 2) {
             asyncExecutor.setMaxConcurrency(1);
+        } else if (maxConns <= 4) {
+            asyncExecutor.setMaxConcurrency(2);
         } else {
-            throw new UnsupportedOperationException("Unsupported syntax mode: " + activeDialect);
+            asyncExecutor.setMaxConcurrency(maxConns - 2);
         }
 
-        // e.g. "MyPlugin::MYSQL(user%localhost)::mydb" or "MyPlugin::SQLITE::mydb"
-        String poolName = platformHandle.name() + "::" + sqlConnectionConfig.sqlDialect();
-        if (sqlConnectionConfig.sqlDialect() == SqlDialect.MYSQL) {
-            poolName += "(" + sqlConnectionConfig.username() + "%" + sqlConnectionConfig.host() + ")";
-        }
-        poolName += "::" + sqlConnectionConfig.database();
+        // e.g. "MyPlugin::MySQL::rot%10.0.50.99/mydb" or "MyPlugin::SQLite::/var/data/mydb.db"
+        String poolName = platformHandle.name() + "::" + activeDialect + "::" + sqlConnectionConfig.connectionId();
 
         hikariConfig.setPoolName(poolName);
         hikariConfig.setConnectionTimeout(TimeUnit.SECONDS.toMillis(30));
@@ -303,7 +283,7 @@ public class SqlClient {
             @NotNull UpsertStatement upsert,
             Object... params
     ) throws DatabaseException {
-        return executeUpdate(upsert.sql(sqlConnectionConfig.sqlDialect()), params);
+        return executeUpdate(upsert.sql(sqlConnectionConfig.dialect()), params);
     }
 
     /**
@@ -326,7 +306,7 @@ public class SqlClient {
             @NotNull UpsertStatement upsert,
             Object... params
     ) throws DatabaseException {
-        return CompletableFuture.supplyAsync(() -> executeUpdate(upsert.sql(sqlConnectionConfig.sqlDialect()), params), asyncExecutor);
+        return CompletableFuture.supplyAsync(() -> executeUpdate(upsert.sql(sqlConnectionConfig.dialect()), params), asyncExecutor);
     }
 
     /**
@@ -338,7 +318,7 @@ public class SqlClient {
      * @return The SQL string for the active dialect.
      */
     public String sql(@NotNull UpsertStatement upsert) {
-        return upsert.sql(sqlConnectionConfig.sqlDialect());
+        return upsert.sql(sqlConnectionConfig.dialect());
     }
 
     /**
