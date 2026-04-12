@@ -71,6 +71,14 @@ public class SqlClient {
         return platformHandle;
     }
 
+    /**
+     * Updates the connection configuration, reconnecting the pool if the new config differs
+     * from the current one (as determined by {@link SqlConnectionConfig#isEquivalent}).
+     *
+     * @param config The new connection configuration.
+     * @return {@code true} if the configuration changed and a reconnection was performed;
+     *         {@code false} if the config was equivalent to the current one and no action was taken.
+     */
     public boolean setSqlConnectionConfig(@NotNull SqlConnectionConfig config) {
         final boolean connectionChanged = !config.isEquivalent(this.sqlConnectionConfig);
         if (connectionChanged) {
@@ -155,7 +163,7 @@ public class SqlClient {
             throw new UnsupportedOperationException("Unsupported syntax mode: " + activeDialect);
         }
 
-        // EternalSurvival::MySQL(u_893893%localhost)::s3_389274672
+        // e.g. "MyPlugin::MYSQL(user%localhost)::mydb" or "MyPlugin::SQLITE::mydb"
         String poolName = platformHandle.name() + "::" + sqlConnectionConfig.sqlDialect();
         if (sqlConnectionConfig.sqlDialect() == SqlDialect.MYSQL) {
             poolName += "(" + sqlConnectionConfig.username() + "%" + sqlConnectionConfig.host() + ")";
@@ -221,7 +229,7 @@ public class SqlClient {
     }
 
     /** @return true if the table cannot be found in the database metadata. */
-    public boolean tableDoesNotExists(String tableName) {
+    public boolean tableDoesNotExist(String tableName) {
         return !tableExists(tableName);
     }
 
@@ -321,6 +329,14 @@ public class SqlClient {
         return CompletableFuture.supplyAsync(() -> executeUpdate(upsert.sql(sqlConnectionConfig.sqlDialect()), params), asyncExecutor);
     }
 
+    /**
+     * Resolves the dialect-specific SQL string for the given {@link UpsertStatement} using
+     * the currently active dialect.
+     * <p>Convenience wrapper around {@link UpsertStatement#sql(SqlDialect)}.</p>
+     *
+     * @param upsert The upsert statement to resolve.
+     * @return The SQL string for the active dialect.
+     */
     public String sql(@NotNull UpsertStatement upsert) {
         return upsert.sql(sqlConnectionConfig.sqlDialect());
     }
@@ -422,22 +438,17 @@ public class SqlClient {
      * This method is similar to {@link #executeTransaction(ThrowingFunction)} except that the connection
      * used is set to {@code auto-commit = true} so that each command executes immediately.
      * </p>
-     * Usage Example: TODO update
+     * <p>Usage Example:</p>
      * <pre>{@code
-     * db.executeSession(conn -> {
+     * db.executeSession(ctx -> {
      *     // 1. Read something
-     *     try (PreparedStatement ps1 = db.prepareStatement(conn,
-     *          "SELECT balance FROM users WHERE id = ?", 1);
-     *          ResultSet rs = ps1.executeQuery()
-     *     ) {
-     *         if (rs.next() && rs.getDouble("balance") > 10) {
-     *             // 2. Update something using the SAME connection
-     *             try (PreparedStatement ps2 = db.prepareStatement(conn,
-     *                 "UPDATE users SET balance = balance - 10 WHERE id = ?", 1)
-     *             ) {
-     *                 ps2.executeUpdate();
-     *             }
-     *         }
+     *     double balance = ctx.executeQuery(
+     *         "SELECT balance FROM users WHERE id = ?",
+     *         rs -> rs.next() ? rs.getDouble("balance") : 0.0,
+     *         userId);
+     *     if (balance > 10) {
+     *         // 2. Update something using the SAME connection
+     *         ctx.executeUpdate("UPDATE users SET balance = balance - 10 WHERE id = ?", userId);
      *     }
      *     return null;
      * });
@@ -445,7 +456,7 @@ public class SqlClient {
      *
      * @param action A function provided a {@link ExecutionContext} for easy statement execution.
      * @param <T>    The return type of the operation.
-     * @return A future containing the result of the session.
+     * @return The result of the action.
      * @throws DatabaseException if a database access error occurs.
      * @see #executeTransaction(ThrowingFunction)
      */

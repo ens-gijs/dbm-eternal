@@ -47,7 +47,6 @@ public final class SchemaMigrator {
      * manually only after {@link SqlDatabaseManager} is able to provide a connection.
      *
      * @param manager The manager providing database connectivity and dialect information.
-     * @throws DatabaseException If the `SchemaMigrations` table cannot be verified or the version cache fail to load.
      */
     public SchemaMigrator(SqlDatabaseManager manager) {
         // Default constructor uses the real loader

@@ -206,10 +206,36 @@ public final class RepositoryRegistry {
         }
     }
 
+    /**
+     * Scans the given plugin object's classpath for migration and registry resources and
+     * returns a {@link RegistrationHelper} for configuring lifecycle callbacks.
+     * <p>
+     * The parameter is typed as {@link Object} so that platform-specific plugin types
+     * (e.g., {@code org.bukkit.plugin.Plugin}) do not need to be on the compile-time classpath
+     * of this module. The plugin's {@link ClassLoader} is extracted via
+     * {@code plugin.getClass().getClassLoader()}.
+     * </p>
+     *
+     * @param platformHandle Identifies the registering plugin.
+     * @param plugin         Any object whose {@link ClassLoader} scopes the plugin's resources.
+     * @throws RepositoryInitializationException If JAR resources cannot be resolved.
+     * @throws MigrationParseException           If any migration file cannot be parsed.
+     * @throws IllegalStateException             If registration has already been closed.
+     */
     public RegistrationHelper register(@NotNull PlatformHandle platformHandle, @NotNull Object plugin) throws RepositoryInitializationException, MigrationParseException {
         return register(platformHandle, plugin.getClass().getClassLoader());
     }
 
+    /**
+     * Scans the given classpath scope for migration and registry resources and returns a
+     * {@link RegistrationHelper} for configuring lifecycle callbacks.
+     *
+     * @param platformHandle Identifies the registering plugin.
+     * @param scope          The {@link ClassLoader} used to discover classpath resources.
+     * @throws RepositoryInitializationException If JAR resources cannot be resolved.
+     * @throws MigrationParseException           If any migration file cannot be parsed.
+     * @throws IllegalStateException             If registration has already been closed.
+     */
     public RegistrationHelper register(@NotNull PlatformHandle platformHandle, @NotNull ClassLoader scope) throws RepositoryInitializationException, MigrationParseException {
         if (votingClosed) throw new IllegalStateException("Registration is closed!");
         scanPlugin(platformHandle, scope);
