@@ -8,8 +8,25 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
+/**
+ * Configuration for a {@link SqlDatabaseManager}.
+ * <p>
+ * Combines a {@link SqlConnectionConfig} with a list of {@link Repository} API interfaces
+ * that this manager is responsible for hosting. The {@code provides} list drives automatic
+ * provider nomination in the {@link io.github.ensgijs.dbm.repository.RepositoryRegistry}.
+ * </p>
+ *
+ * @param sqlConnectionConfig The database connection settings.
+ * @param provides            The {@link Repository} API interfaces this manager provides.
+ *                            May be empty if this manager is not acting as a registry provider.
+ */
 public record DbmConfig(@NotNull SqlConnectionConfig sqlConnectionConfig, @NotNull List<Class<? extends Repository>> provides) {
 
+    /**
+     * Creates a config with no nominated repository providers.
+     *
+     * @param sqlConnectionConfig The database connection settings.
+     */
     public DbmConfig(@NotNull SqlConnectionConfig sqlConnectionConfig) {
         this(sqlConnectionConfig, Collections.emptyList());
     }
@@ -21,6 +38,14 @@ public record DbmConfig(@NotNull SqlConnectionConfig sqlConnectionConfig, @NotNu
         this.provides = List.copyOf(provides);
     }
 
+    /**
+     * Creates a config by resolving fully-qualified class name strings to {@link Repository} types.
+     *
+     * @param sqlConnectionConfig The database connection settings.
+     * @param classLoader         The class loader used to resolve the provided class names.
+     * @param provides            Fully-qualified class names of {@link Repository} API interfaces.
+     * @throws InvalidDbmConfigException If any class name cannot be resolved or is not a {@link Repository}.
+     */
     public DbmConfig(@NotNull SqlConnectionConfig sqlConnectionConfig, @NotNull ClassLoader classLoader, @NotNull List<String> provides) throws InvalidDbmConfigException {
         this(sqlConnectionConfig, asRepositoryTypes(classLoader, provides));
     }
@@ -46,6 +71,7 @@ public record DbmConfig(@NotNull SqlConnectionConfig sqlConnectionConfig, @NotNu
         return providesTypes;
     }
 
+    /** Thrown when a {@link DbmConfig} cannot be constructed due to unresolvable class references. */
     public static class InvalidDbmConfigException extends Exception {
         public InvalidDbmConfigException() {}
         public InvalidDbmConfigException(String message) {

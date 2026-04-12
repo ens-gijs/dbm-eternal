@@ -166,7 +166,7 @@ public record ExecutionContext(/*@NotNull*/ Connection connection, /*@NotNull*/ 
     }
 
     /**
-     * Splits updates in multiple batches to balance performance and database resource usage.<br/>>
+     * Splits updates in multiple batches to balance performance and database resource usage.<br/>
      * <b>Intent-Based Behavior:</b>
      * <ul>
      * <li><b>Session Mode:</b> If {@code autoCommit} is enabled on entry, this method

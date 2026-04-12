@@ -7,6 +7,20 @@ import java.sql.SQLException;
 import java.util.Arrays;
 import java.util.concurrent.CompletionException;
 
+/**
+ * Base exception for all database errors thrown by this library.
+ * <p>
+ * Extends {@link CompletionException} so that instances thrown inside async pipelines
+ * (e.g. {@link java.util.concurrent.CompletableFuture}) propagate correctly without
+ * being re-wrapped by the executor framework.
+ * </p>
+ * <p>
+ * Use {@link #wrap(Throwable)} to convert arbitrary exceptions into a {@code DatabaseException}
+ * without double-wrapping. Use {@link #getSqlExceptionCause()} to extract the underlying
+ * {@link java.sql.SQLException} from the cause chain when you need JDBC-level error details
+ * (vendor error code, SQL state, etc.).
+ * </p>
+ */
 public class DatabaseException extends CompletionException {
 
     public DatabaseException(String message) {

@@ -6,24 +6,44 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Marks an interface as a repository api and declares which migrations are required for it.
- * <p>This annotation is REQUIRED, even if it's list of migrations is empty, on all {@link Repository}
- * interfaces which describe the API of a repository.</p>
+ * Marks an interface as a repository API and declares which migration areas it requires.
+ * <p>
+ * This annotation is <b>required</b> on every {@link Repository} interface that describes
+ * a public API contract, even if its migration list is empty. It must only be placed on
+ * interfaces (not on abstract classes or concrete implementations).
+ * </p>
+ * <p>Usage example:</p>
+ * <pre>{@code
+ * @RepositoryApi("users")
+ * public interface UserRepository extends Repository {
+ *     List<User> findAll();
+ * }
+ *
+ * // Extending an existing API — inherits "users" migrations by default:
+ * @RepositoryApi("premium_users")
+ * public interface PremiumUserRepository extends UserRepository {
+ *     List<User> findPremium();
+ * }
+ * }</pre>
+ *
  * @see Repository
+ * @see io.github.ensgijs.dbm.repository.RepositoryRegistry
  */
 @Retention(RetentionPolicy.RUNTIME)
 @Target(ElementType.TYPE)
 public @interface RepositoryApi {
 
     /**
-     * Required migration names (may be empty). The names of the functional areas to migrate (e.g., "users", "core").
+     * Names of migration areas required by this repository interface (e.g., {@code "users"}, {@code "core"}).
+     * May be empty if this interface introduces no new migrations of its own.
      */
-    String[] value() default "";
+    String[] value() default {};
 
     /**
-     * If true (default), the migrator will also look for this annotation on parent interfaces
-     * and include their migration names. If an interface in the hierarchy lacks the MigrationName annotation
-     * it will be traversed as if inherit itself was inherited.
+     * If {@code true} (the default), the migration system will also collect migration names from
+     * ancestor {@link Repository} interfaces annotated with {@code @RepositoryApi}, walking up the
+     * hierarchy until an interface with {@code inheritMigrations = false} is encountered.
+     * Interfaces in the hierarchy that lack this annotation are transparently skipped.
      */
     boolean inheritMigrations() default true;
 

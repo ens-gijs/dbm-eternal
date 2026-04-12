@@ -52,9 +52,13 @@ public final class UpsertStatement {
 
     /**
      * Generates or retrieves the cached SQL string for the specified dialect.
-     * <p><b>Parameter Order Warning:</b> The generated SQL expects parameters in the
+     * <p><b>Parameter Order:</b> The generated SQL expects parameters in the
      * following order: {@code [keyColumns..., valueColumns...]}. Ensure your
      * execution time arguments match this sequence.</p>
+     * <p><b>Thread Safety:</b> This method is <em>not</em> thread-safe. The most recently generated
+     * SQL string is cached by dialect; concurrent calls from multiple threads may cause the cache
+     * to be rebuilt unnecessarily. Instantiate one {@code UpsertStatement} per repository field
+     * and call {@code sql()} from a single thread (or accept the minor regeneration overhead).</p>
      * @param dialect The target database dialect (MySQL or SQLite).
      * @return A formatted SQL string. Returns an empty string if the dialect is
      * {@code null} or {@link SqlDialect#UNDEFINED}.

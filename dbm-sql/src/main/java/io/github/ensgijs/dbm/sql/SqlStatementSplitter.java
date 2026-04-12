@@ -3,6 +3,15 @@ package io.github.ensgijs.dbm.sql;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * Utility for splitting a multi-statement SQL string into individual statements.
+ * <p>
+ * Correctly handles statement boundaries while respecting single-quoted string literals,
+ * double-quoted identifiers, single-line ({@code --}) comments, and
+ * multi-line ({@code /* ... *}{@code /}) comments so that semicolons inside those
+ * constructs are never treated as statement terminators.
+ * </p>
+ */
 public final class SqlStatementSplitter {
     private SqlStatementSplitter() {}
 

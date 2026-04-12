@@ -19,7 +19,36 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
- * Utility for discovering and parsing migration files from the JAR.
+ * Discovers, parses, and caches migration files from classpath resources.
+ * <p>
+ * Migration files must be placed in the {@code db/migrate/} classpath directory and follow
+ * the naming convention:
+ * <pre>
+ *   {name}.{version}[.{dialect}].{ext}
+ * </pre>
+ * where:
+ * <ul>
+ * <li>{@code name} — the migration area (e.g., {@code core}, {@code users})</li>
+ * <li>{@code version} — a numeric version, typically a Unix timestamp.
+ *     Underscores and dashes are stripped before parsing, so {@code 2024_01_01} and
+ *     {@code 20240101} are equivalent.</li>
+ * <li>{@code dialect} — optional; one of {@code mysql} or {@code sqlite}.
+ *     Required for {@code .sql} files; must be absent for {@code .run} files.</li>
+ * <li>{@code ext} — {@code sql} for raw SQL migrations or {@code run} for programmatic migrations.</li>
+ * </ul>
+ * </p>
+ * <p>
+ * Dependency directives ({@code !AFTER}) may be placed at the top of any migration file
+ * before the first statement:
+ * <pre>
+ *   -- !AFTER: core.20240101
+ * </pre>
+ * </p>
+ * <p>
+ * Results are cached per plugin name. The global master migration list is updated with each
+ * {@link #loadMigrations} call, making all loaded migrations available to
+ * {@link #getMigrations}.
+ * </p>
  */
 public final class MigrationLoader {
     private final static Logger logger = Logger.getLogger("MigrationLoader");
@@ -68,6 +97,19 @@ public final class MigrationLoader {
         masterMigrationList.values().forEach(Map::clear);
     }
 
+    /**
+     * Returns all migrations needed to bring the named migration area up to date for the given dialect,
+     * including any transitive dependencies, topologically sorted and ready to execute.
+     * <p>
+     * All plugins must have already had their migrations loaded via
+     * {@link #loadMigrations(PlatformHandle, ClassLoader)} before this method is called.
+     * </p>
+     *
+     * @param dialect       The SQL dialect to retrieve migrations for.
+     * @param migrationName The migration area name (e.g., {@code "users"}, {@code "core"}).
+     * @return An ordered list of migrations with all dependencies satisfied.
+     * @throws DatabaseException If a circular dependency or missing dependency is detected during sorting.
+     */
     public static @NotNull List<Migration> getMigrations(final @NotNull SqlDialect dialect, final @NotNull String migrationName) throws DatabaseException {
         Collection<Migration> allMigrations = masterMigrationList.get(dialect).values();
         Map<Migration.Key, Migration> targetMigrations = new HashMap<>();
