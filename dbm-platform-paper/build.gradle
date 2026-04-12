@@ -2,19 +2,25 @@ plugins {
     id 'java'
 }
 
-group = 'io.github.ensgijs.dbm.platform.paper'
+group = 'io.github.ensgijs.dbm.platform'
 version = '1.0-SNAPSHOT'
 
 repositories {
     mavenCentral()
+    maven {
+        name = 'papermc'
+        url = 'https://repo.papermc.io/repository/maven-public/'
+    }
 }
 
 dependencies {
-    implementation project(':dbm-core')
     implementation project(':dbm-sql')
-    testImplementation platform('org.junit:junit-bom:5.10.0')
-    testImplementation 'org.junit.jupiter:junit-jupiter'
-    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    implementation project(':dbm-core')
+    compileOnly 'io.papermc.paper:paper-api:1.21.11-R0.1-SNAPSHOT'
+    // Uses version defined in: dbm-eternal/gradle/libs.versions.toml
+    compileOnly libs.jetbrains.annotations
+    testImplementation libs.bundles.testing
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
 test {

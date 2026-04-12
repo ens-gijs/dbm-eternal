@@ -2,7 +2,7 @@ plugins {
     id 'java'
 }
 
-group = 'io.github.ensgijs.dbm.core'
+group = 'io.github.ensgijs.dbm'
 version = '1.0-SNAPSHOT'
 
 repositories {
@@ -10,9 +10,12 @@ repositories {
 }
 
 dependencies {
-    testImplementation platform('org.junit:junit-bom:5.10.0')
-    testImplementation 'org.junit.jupiter:junit-jupiter'
-    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    implementation project(':dbm-sql')
+    // Uses version defined in: dbm-eternal/gradle/libs.versions.toml
+    compileOnly libs.jetbrains.annotations
+    implementation libs.hikaricp
+    testImplementation libs.bundles.testing
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
 test {

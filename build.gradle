@@ -5,7 +5,7 @@ plugins {
 }
 
 allprojects {
-    group = 'io.github.ensgijs'
+    group = 'io.github.ensgijs.dbm'
     version = '1.0.0-SNAPSHOT'
 
     repositories {
@@ -23,6 +23,18 @@ subprojects {
         withJavadocJar()
         withSourcesJar()
         toolchain.languageVersion = JavaLanguageVersion.of(21)
+    }
+
+    javadoc {
+        options {
+            // Syntax: 'tag_name:placement:header_text'
+            // 'a' means the tag can be used in all places
+            tags(
+                    'apiNote:a:API Note:',
+                    'implSpec:a:Implementation Requirements:',
+                    'implNote:a:Implementation Note:'
+            )
+        }
     }
 
     // Maven Central Requirements

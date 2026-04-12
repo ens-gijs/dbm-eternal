@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS UtMiddle (
+    id INTEGER PRIMARY KEY ASC,
+    uuid text UNIQUE NOT NULL,
+    name text NOT NULL
+);

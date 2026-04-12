@@ -1,0 +1,25 @@
+[versions]
+# https://mvnrepository.com/artifact/org.junit.jupiter/junit-jupiter
+junit = "6.0.3"
+# https://mvnrepository.com/artifact/org.mockito/mockito-core
+mockito = "5.23.0"
+# https://mvnrepository.com/artifact/org.jetbrains/annotations
+jetbrains-annotations = "26.1.0"
+# https://mvnrepository.com/artifact/com.zaxxer/HikariCP
+hikari = "7.0.2"
+# https://mvnrepository.com/artifact/com.mysql/mysql-connector-j
+mysql-connector = "9.6.0"
+# https://mvnrepository.com/artifact/org.xerial/sqlite-jdbc
+sqlite-jdbc = "3.51.3.0"
+
+[libraries]
+junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
+mockito-core = { module = "org.mockito:mockito-core", version.ref = "mockito" }
+jetbrains-annotations = { module = "org.jetbrains:annotations", version.ref = "jetbrains-annotations" }
+hikaricp = { module = "com.zaxxer:HikariCP", version.ref = "hikari" }
+mysql = { module = "com.mysql:mysql-connector-j", version.ref = "mysql-connector" }
+sqlite-jdbc = { module = "org.xerial:sqlite-jdbc", version.ref = "sqlite-jdbc" }
+
+[bundles]
+testing = ["junit-jupiter", "mockito-core", "jetbrains-annotations"]
+db-connectivity = ["hikaricp", "mysql", "sqlite-jdbc"]

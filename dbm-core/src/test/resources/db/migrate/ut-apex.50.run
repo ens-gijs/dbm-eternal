@@ -1,0 +1,2 @@
+-- !AFTER ut-middle.10
+io.github.ensgijs.dbm.migration.FakeProgrammaticMigration
