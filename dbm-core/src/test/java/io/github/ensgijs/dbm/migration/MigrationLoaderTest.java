@@ -245,7 +245,7 @@ public class MigrationLoaderTest {
         void setUp() throws MigrationParseException {
             // Clear caches to ensure test isolation
             MigrationLoader.resetInternalState();
-            plugin = new SimplePlatformHandle("MockPlugin", null, Collections.emptyList());
+            plugin = new SimplePlatformHandle("MockPlugin", Collections.emptyList());
             MigrationLoader.loadMigrations(plugin, this.getClass().getClassLoader());
         }
 

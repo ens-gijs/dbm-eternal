@@ -32,18 +32,20 @@ layer without migrations or the repository registry.
 ### 2. Configure a connection
 
 ```java
-SqlConnectionConfig mysqlConfig = new SqlConnectionConfig(
-    SqlDialect.MYSQL, "my_database", /*maxConnections*/ 10,
-    "127.0.0.1", 3306, "user", "password");
+// MySQL (or MariaDB)
+SqlConnectionConfig mysqlConfig = new MySqlConnectionConfig(
+    "127.0.0.1", 3306, "my_database", /*maxConnections*/ 10, "user", "password");
 
-SqlConnectionConfig sqliteConfig = new SqlConnectionConfig(
-    SqlDialect.SQLITE, "my_database", 1, null, 0, null, null);
+// SQLite — takes a File directly; use the .of() factory to derive the path from a folder + name
+SqlConnectionConfig sqliteConfig = new SqliteConnectionConfig(new File("data/my_database.db"));
+// or equivalently:
+SqlConnectionConfig sqliteConfig = SqliteConnectionConfig.of(new File("data"), "my_database");
 ```
 
 ### 3. Run queries with `SqlClient`
 
 ```java
-PlatformHandle platform = new SimplePlatformHandle("MyApp", new File("data"), List.of());
+PlatformHandle platform = new SimplePlatformHandle("MyApp", List.of());
 SqlClient db = new SqlClient(platform, mysqlConfig);
 
 // Single update

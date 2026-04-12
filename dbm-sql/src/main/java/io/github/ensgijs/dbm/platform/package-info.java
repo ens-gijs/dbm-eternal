@@ -3,10 +3,9 @@
  *
  * <p>
  * {@link io.github.ensgijs.dbm.platform.PlatformHandle} decouples the SQL layer from any
- * specific host environment. It supplies a name (for logging and connection pool identification)
- * and a data folder (for SQLite file placement). Dependency relationships between handles drive
- * callback ordering in the
- * {@link io.github.ensgijs.dbm.repository.RepositoryRegistry}.
+ * specific host environment. It supplies a name for logging and connection pool identification,
+ * plus optional dependency relationships between handles that drive callback ordering in the
+ * {@code RepositoryRegistry}.
  * </p>
  *
  * <p>

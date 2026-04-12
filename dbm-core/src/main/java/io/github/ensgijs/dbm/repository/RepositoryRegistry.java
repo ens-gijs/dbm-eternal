@@ -786,7 +786,7 @@ public final class RepositoryRegistry {
             if (this == other || this.equals(other)) return 0;
             int k = super.compareTo(other);
             if (k != 0) return k;
-            return this.manager.getSqlConnectionConfig().database().compareTo(other.manager.getSqlConnectionConfig().database());
+            return this.manager.getSqlConnectionConfig().connectionId().compareTo(other.manager.getSqlConnectionConfig().connectionId());
         }
 
         @Override

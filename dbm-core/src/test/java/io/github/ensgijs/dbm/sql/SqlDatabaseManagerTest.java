@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+import java.io.File;
 import java.sql.Connection;
 import java.sql.ParameterMetaData;
 import java.sql.PreparedStatement;
@@ -55,9 +56,8 @@ public class SqlDatabaseManagerTest {
         when(mockPs.getParameterMetaData()).thenReturn(mockMetaData);
         when(mockMetaData.getParameterCount()).thenReturn(2);
 
-        mockConfig = new DbmConfig(new SqlConnectionConfig(
-                SqlDialect.MYSQL, "MockedTestDb",
-                6, "10.0.50.99", 1324, "rot", "tot42"));
+        mockConfig = new DbmConfig(new MySqlConnectionConfig(
+                "10.0.50.99", 1324, "MockedTestDb", 6, "rot", "tot42"));
     }
 
     @Nested
@@ -68,9 +68,8 @@ public class SqlDatabaseManagerTest {
         @DisplayName("Should configure MySQL with performance properties")
         void testMySQLInitialization() {
             DbmConfig dbmConfig = new DbmConfig(
-                    new SqlConnectionConfig(
-                            SqlDialect.MYSQL, "MockedTestDb",
-                            6, "10.0.50.99", 1324, "rot", "tot42"));
+                    new MySqlConnectionConfig(
+                            "10.0.50.99", 1324, "MockedTestDb", 6, "rot", "tot42"));
 
             SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, mockConfig, mockMigrator, null, mockHikariCreator);
 
@@ -88,9 +87,7 @@ public class SqlDatabaseManagerTest {
         @Test
         @DisplayName("Should force SQLite pool size to 1")
         void testSQLiteInitialization() {
-            var mockConfig = new DbmConfig(new SqlConnectionConfig(
-                    SqlDialect.SQLITE, "MockedTestDb",
-                    6, null, 0, null, null));
+            var mockConfig = new DbmConfig(new SqliteConnectionConfig(new File("/data/MockedTestDb.db")));
 
             SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, mockConfig, mockMigrator, null, mockHikariCreator);
 
@@ -127,9 +124,8 @@ public class SqlDatabaseManagerTest {
             SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, mockConfig, mockMigrator, null, mockHikariCreator);
             clearInvocations(mockHikariCreator);
 
-            manager.setSqlConnectionConfig(new SqlConnectionConfig(
-                    SqlDialect.MYSQL, "MockedTestDb",
-                    6, "10.0.50.99", 1324, "rot", "tot42"));
+            manager.setSqlConnectionConfig(new MySqlConnectionConfig(
+                    "10.0.50.99", 1324, "MockedTestDb", 6, "rot", "tot42"));
 
             verify(mockHikariCreator, never()).apply(any());
             verify(mockDataSource, never()).close();
@@ -151,9 +147,8 @@ public class SqlDatabaseManagerTest {
             assertNotNull(repo);
             assertFalse(repo.invalidateCacheCalled);
 
-            manager.setSqlConnectionConfig(new SqlConnectionConfig(
-                    SqlDialect.MYSQL, "MockedTestDbV2",
-                    6, "10.0.50.99", 1324, "rot", "tot42"));
+            manager.setSqlConnectionConfig(new MySqlConnectionConfig(
+                    "10.0.50.99", 1324, "MockedTestDbV2", 6, "rot", "tot42"));
 
             assertTrue(repo.invalidateCacheCalled);
 
@@ -240,9 +235,8 @@ public class SqlDatabaseManagerTest {
         // When reload is called and the second repository throws a RuntimeException.
         result1.poisonInvalidateCache = true;
 
-        manager.setSqlConnectionConfig(new SqlConnectionConfig(
-                SqlDialect.MYSQL, "MockedTestDbV2",
-                6, "10.0.50.99", 1324, "rot", "tot42"));
+        manager.setSqlConnectionConfig(new MySqlConnectionConfig(
+                "10.0.50.99", 1324, "MockedTestDbV2", 6, "rot", "tot42"));
 
         // Then the repository should be removed from repositoryInstances.
         //  And the next call to getRepository should create a new instance.

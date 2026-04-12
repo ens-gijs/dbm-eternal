@@ -10,7 +10,6 @@ import org.junit.jupiter.api.BeforeEach;
 import io.github.ensgijs.dbm.sql.SqlDatabaseManager;
 import org.junit.jupiter.api.*;
 
-import java.io.File;
 import java.io.FileNotFoundException;
 import java.util.Collections;
 import java.util.List;
@@ -107,7 +106,7 @@ public class RepositoryRegistryTest {
             @NotNull String name,
             @NotNull List<String> dependencies
     ) {
-        return new SimplePlatformHandle(name, null, dependencies);
+        return new SimplePlatformHandle(name, dependencies);
     }
 
 
@@ -295,7 +294,7 @@ public class RepositoryRegistryTest {
         AtomicInteger configure = new AtomicInteger();
         AtomicInteger prepare = new AtomicInteger();
         AtomicInteger ready = new AtomicInteger();
-        registry.register(new SimplePlatformHandle("MyPlugin", new File(""), Collections.emptyList()), this)
+        registry.register(new SimplePlatformHandle("MyPlugin", Collections.emptyList()), this)
                 .onReady(c -> ready.set(ord.incrementAndGet()))
                 .onConfigure(c -> configure.set(ord.incrementAndGet()))
                 .onPrepare(c -> prepare.set(ord.incrementAndGet()));

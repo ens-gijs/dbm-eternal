@@ -90,7 +90,9 @@ public final class UpsertStatement {
                     .map(c -> c + " = excluded." + c)
                     .collect(Collectors.joining(", ")));
         } else {
-            throw new UnsupportedOperationException("IDK how to upsert " + dialect);
+            // When adding a new SqlDialect, add a new branch here.
+            // See SqlDialect javadoc for the complete list of touch-points.
+            throw new UnsupportedOperationException("No upsert syntax defined for dialect: " + dialect);
         }
 
         return cachedSql = sql.toString();

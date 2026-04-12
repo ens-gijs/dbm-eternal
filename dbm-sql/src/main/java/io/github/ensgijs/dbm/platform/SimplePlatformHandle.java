@@ -2,7 +2,6 @@ package io.github.ensgijs.dbm.platform;
 
 import org.jetbrains.annotations.NotNull;
 
-import java.io.File;
 import java.util.List;
 
 /**
@@ -13,16 +12,14 @@ import java.util.List;
  * </p>
  *
  * @param name         A unique name identifying this platform / plugin instance.
- * @param dataFolder   The directory where database files (e.g., SQLite) should be stored.
  * @param dependencies Names of other platform handles that this one depends on. Used by
- *                     {@link io.github.ensgijs.dbm.repository.RepositoryRegistry} to establish
+ *                     {@code RepositoryRegistry} to establish
  *                     callback ordering during bootstrapping.
  */
-public record SimplePlatformHandle(@NotNull String name, @NotNull File dataFolder, @NotNull List<String> dependencies) implements PlatformHandle {
+public record SimplePlatformHandle(@NotNull String name, @NotNull List<String> dependencies) implements PlatformHandle {
 
-    public SimplePlatformHandle(@NotNull String name, @NotNull File dataFolder, @NotNull List<String> dependencies) {
+    public SimplePlatformHandle(@NotNull String name, @NotNull List<String> dependencies) {
         this.name = name;
-        this.dataFolder = dataFolder;
         this.dependencies = List.copyOf(dependencies);
     }
 
