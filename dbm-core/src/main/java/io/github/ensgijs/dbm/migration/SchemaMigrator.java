@@ -66,21 +66,23 @@ public final class SchemaMigrator {
      */
     private void ensureHistoryTable() throws DatabaseException {
         // We use LONG/BIGINT for version to support timestamps
-        String sql = client.activeDialect() == SqlDialect.MYSQL
-                ? """
+        String sql = switch(client.activeDialect()) {
+            case UNDEFINED -> throw new DatabaseException("Client does not have an active dialect!");
+            case SqlDialect.MYSQL -> """
                   CREATE TABLE IF NOT EXISTS SchemaMigrations (
                       name VARCHAR(128),
                       version BIGINT,
                       applied_at BIGINT,
                       PRIMARY KEY (name, version)
-                  )"""
-                : """
+                  )""";
+            case SqlDialect.SQLITE -> """
                   CREATE TABLE IF NOT EXISTS SchemaMigrations (
                       name TEXT,
                       version INTEGER,
                       applied_at INTEGER,
                       PRIMARY KEY (name, version)
                   )""";
+        };
         client.executeUpdate(sql);
     }
 

@@ -5,8 +5,6 @@ import io.github.ensgijs.dbm.util.objects.ConsumableSubscribableEvent;
 import io.github.ensgijs.dbm.util.objects.SubscribableEvent;
 import org.jetbrains.annotations.NotNull;
 
-import java.util.logging.Logger;
-
 /**
  * Provides the boilerplate required for any {@link Repository} implementation.<br/>
  * Implementors <b>MUST</b>:
@@ -19,12 +17,10 @@ import java.util.logging.Logger;
  * @see Repository
  */
 public abstract class AbstractRepository implements Repository {
-    protected final @NotNull Logger logger;
     protected final @NotNull SqlClient sqlClient;
     protected final @NotNull ConsumableSubscribableEvent<Repository> onCacheInvalidatedEvent = new ConsumableSubscribableEvent<>();
 
     public AbstractRepository(@NotNull SqlClient sqlClient) {
-        this.logger = Logger.getLogger(this.getClass().getSimpleName());
         this.sqlClient = sqlClient;
     }
 

@@ -138,6 +138,7 @@ class SchemaMigratorTest {
                     Collections.emptySet(),
                     "TestPlugin"
             );
+
             when(mockProvider.getMigrations(any(), anyString())).thenReturn(List.of(migration));
             doThrow(new DatabaseException("Syntax Error")).when(mockContext).executeUpdate("INVALID SQL");
 
@@ -154,15 +155,22 @@ class SchemaMigratorTest {
                     Collections.emptySet(),
                     "TestPlugin"
             );
-            when(mockProvider.getMigrations(any(), anyString())).thenReturn(List.of(migration));
 
+            when(mockProvider.getMigrations(any(), anyString())).thenReturn(List.of(migration));
             migrator.migrate("java_test_area");
 
-            assertTrue(FakeProgrammaticMigration.wasCalled);
-            assertEquals(mockContext, FakeProgrammaticMigration.capturedContext);
+            assertTrue(FakeProgrammaticMigration.wasCalled,
+                    "The ProgrammaticMigration.migrate() method should have been called.");
+            assertEquals(mockContext, FakeProgrammaticMigration.capturedContext,
+                    "The current ExecutionContext should be passed to the Java migration.");
+
             verify(mockContext).executeUpdate(
                     eq("INSERT INTO SchemaMigrations (name, version, applied_at) VALUES (?, ?, ?)"),
-                    eq("java_test_area"), eq(101L), anyLong());
+                    eq("java_test_area"),
+                    eq(101L),
+                    anyLong()
+            );
+
             verify(mockContext).commit();
         }
     }

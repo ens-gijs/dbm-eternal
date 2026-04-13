@@ -219,9 +219,9 @@ public final class MigrationLoader {
                     }
                     SqlDialect dialect = SqlDialect.valueOf(matcher.group(3).toUpperCase(Locale.ENGLISH));
                     mode = switch(dialect) {
+                        case UNDEFINED -> throw new MigrationParseException("Unexpected sql dialect " + dialect);
                         case SqlDialect.SQLITE -> Migration.MigrationSourceType.SQLITE;
                         case SqlDialect.MYSQL -> Migration.MigrationSourceType.MYSQL;
-                        default -> throw new MigrationParseException("Unexpected sql dialect " + dialect);
                     };
                 } else {
                     if ("sql".equals(fileType)) {
@@ -256,10 +256,9 @@ public final class MigrationLoader {
                 source = new Migration.JavaSource(clazz.asSubclass(Migration.ProgrammaticMigration.class));
             } else {
                 SqlDialect dialect = switch (parsedMigrationFileName.migrationSourceType) {
+                    case RUN -> null;  // unreachable, but required
                     case Migration.MigrationSourceType.MYSQL -> SqlDialect.MYSQL;
                     case Migration.MigrationSourceType.SQLITE -> SqlDialect.SQLITE;
-                    default -> throw new IllegalStateException("Unexpected migration source type: "
-                            + parsedMigrationFileName.migrationSourceType);
                 };
                 source = new Migration.SqlSource(
                         dialect,
