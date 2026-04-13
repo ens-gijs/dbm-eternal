@@ -6,21 +6,14 @@ import io.github.ensgijs.dbm.migration.SchemaMigrator;
 import io.github.ensgijs.dbm.platform.PlatformHandle;
 import io.github.ensgijs.dbm.repository.FakeRepository;
 import io.github.ensgijs.dbm.repository.FakeRepositoryImpl;
-import io.github.ensgijs.dbm.repository.RepositoryRegistry;
 import org.jetbrains.annotations.NotNull;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Nested;
-import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
+import org.junit.jupiter.api.*;
 
 import java.io.File;
 import java.sql.Connection;
 import java.sql.ParameterMetaData;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
-import java.util.Collections;
-import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
@@ -29,14 +22,12 @@ import static org.mockito.Mockito.*;
 
 public class SqlDatabaseManagerTest {
     private PlatformHandle mockPlatformHandle;
-    private DbmConfig mockConfig;
+    private SqlConnectionConfig mockConnectionConfig;
     private Function<@NotNull HikariConfig, HikariDataSource> mockHikariCreator;
     private HikariDataSource mockDataSource;
     private SchemaMigrator mockMigrator;
-
     private PreparedStatement mockPs;
     private Connection mockConn;
-
 
     @BeforeEach
     protected void setUp() throws Exception {
@@ -56,8 +47,8 @@ public class SqlDatabaseManagerTest {
         when(mockPs.getParameterMetaData()).thenReturn(mockMetaData);
         when(mockMetaData.getParameterCount()).thenReturn(2);
 
-        mockConfig = new DbmConfig(new MySqlConnectionConfig(
-                "10.0.50.99", 1324, "MockedTestDb", 6, "rot", "tot42"));
+        mockConnectionConfig = new MySqlConnectionConfig(
+                "10.0.50.99", 1324, "MockedTestDb", 6, "rot", "tot42");
     }
 
     @Nested
@@ -67,13 +58,12 @@ public class SqlDatabaseManagerTest {
         @Test
         @DisplayName("Should configure MySQL with performance properties")
         void testMySQLInitialization() {
-            DbmConfig dbmConfig = new DbmConfig(
-                    new MySqlConnectionConfig(
-                            "10.0.50.99", 1324, "MockedTestDb", 6, "rot", "tot42"));
+            var config = new MySqlConnectionConfig(
+                    "10.0.50.99", 1324, "MockedTestDb", 6, "rot", "tot42");
 
-            SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, mockConfig, mockMigrator, null, mockHikariCreator);
+            SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, config, mockMigrator, mockHikariCreator);
 
-            ArgumentCaptor<HikariConfig> configCaptor = ArgumentCaptor.forClass(HikariConfig.class);
+            var configCaptor = org.mockito.ArgumentCaptor.forClass(HikariConfig.class);
             verify(mockHikariCreator).apply(configCaptor.capture());
             HikariConfig captured = configCaptor.getValue();
 
@@ -87,30 +77,14 @@ public class SqlDatabaseManagerTest {
         @Test
         @DisplayName("Should force SQLite pool size to 1")
         void testSQLiteInitialization() {
-            var mockConfig = new DbmConfig(new SqliteConnectionConfig(new File("/data/MockedTestDb.db")));
+            var config = new SqliteConnectionConfig(new File("/data/MockedTestDb.db"));
 
-            SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, mockConfig, mockMigrator, null, mockHikariCreator);
+            SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, config, mockMigrator, mockHikariCreator);
 
-            ArgumentCaptor<HikariConfig> configCaptor = ArgumentCaptor.forClass(HikariConfig.class);
+            var configCaptor = org.mockito.ArgumentCaptor.forClass(HikariConfig.class);
             verify(mockHikariCreator).apply(configCaptor.capture());
             assertEquals(1, configCaptor.getValue().getMaximumPoolSize());
             assertEquals(SqlDialect.SQLITE, manager.activeDialect());
-        }
-
-
-        @Test
-        void testAttemptBootstrapping() {
-            RepositoryRegistry registry = spy(new RepositoryRegistry());
-            when(registry.isAcceptingNominations()).thenReturn(true, false);
-
-            SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, mockConfig, mockMigrator, registry, mockHikariCreator);
-            verify(registry, never()).nominateDefaultProvider(any(), any());
-
-            manager.registerProvider(List.of(FakeRepository.class));
-            verify(registry, times(1)).nominateDefaultProvider(FakeRepository.class, manager);
-            clearInvocations(registry);
-            manager.registerProvider(Collections.emptyList());
-            verify(registry, never()).nominateDefaultProvider(FakeRepository.class, manager);
         }
     }
 
@@ -121,7 +95,7 @@ public class SqlDatabaseManagerTest {
         @Test
         @DisplayName("Should NOT recreate pool if config is equivalent")
         void testReloadNoChange() {
-            SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, mockConfig, mockMigrator, null, mockHikariCreator);
+            SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, mockConnectionConfig, mockMigrator, mockHikariCreator);
             clearInvocations(mockHikariCreator);
 
             manager.setSqlConnectionConfig(new MySqlConnectionConfig(
@@ -132,18 +106,12 @@ public class SqlDatabaseManagerTest {
         }
 
         @Test
-        @DisplayName("Should close old pool and reload repositories on change")
+        @DisplayName("Should close old pool and invalidate cached repositories on config change")
         void testReloadWithChange() {
-            RepositoryRegistry mockRegistry = mock(RepositoryRegistry.class);
-            when(mockRegistry.getElectedRepositoryImplementorCandidate(FakeRepository.class))
-                    .thenReturn(new RepositoryRegistry.RepositoryImplementorCandidate(
-                            mockPlatformHandle,
-                            999, List.of(FakeRepository.class), FakeRepositoryImpl.class
-                    ));
-            SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, mockConfig, mockMigrator, mockRegistry, mockHikariCreator);
+            SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, mockConnectionConfig, mockMigrator, mockHikariCreator);
 
-            // Setup a cached repository to verify reload
-            FakeRepositoryImpl repo = (FakeRepositoryImpl) manager.getRepository(FakeRepository.class);
+            // Prime the cache
+            FakeRepositoryImpl repo = (FakeRepositoryImpl) manager.getRepository(FakeRepository.class, FakeRepositoryImpl.class);
             assertNotNull(repo);
             assertFalse(repo.invalidateCacheCalled);
 
@@ -151,9 +119,8 @@ public class SqlDatabaseManagerTest {
                     "10.0.50.99", 1324, "MockedTestDbV2", 6, "rot", "tot42"));
 
             assertTrue(repo.invalidateCacheCalled);
-
-            verify(mockDataSource).close(); // Closes the old one
-            verify(mockHikariCreator, times(2)).apply(any()); // Once for init, once for reload
+            verify(mockDataSource).close();
+            verify(mockHikariCreator, times(2)).apply(any()); // once for init, once for reload
         }
     }
 
@@ -164,11 +131,10 @@ public class SqlDatabaseManagerTest {
         @Test
         @DisplayName("Should shutdown executor before closing DataSource")
         void testGracefulShutdown() throws InterruptedException {
-            SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, mockConfig, mockMigrator, null, mockHikariCreator);
+            SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, mockConnectionConfig, mockMigrator, mockHikariCreator);
 
             manager.shutdown(5, TimeUnit.SECONDS);
 
-            // Verifies sequential shutdown (simplified as asyncExecutor is internal)
             verify(mockDataSource).close();
         }
     }
@@ -176,112 +142,99 @@ public class SqlDatabaseManagerTest {
     @Test
     @DisplayName("executeSession should close the connection after the block finishes")
     void testExecuteSessionClosesConnection() throws SQLException {
-        final HikariDataSource mockDs = mock(HikariDataSource.class);
-        Connection mockConn = mock(Connection.class);
-        when(mockDs.getConnection()).thenReturn(mockConn);
-        when(mockConn.prepareStatement(anyString())).thenAnswer(c -> mock(PreparedStatement.class));
+        HikariDataSource mockDs = mock(HikariDataSource.class);
+        Connection conn = mock(Connection.class);
+        when(mockDs.getConnection()).thenReturn(conn);
+        when(conn.prepareStatement(anyString())).thenAnswer(c -> mock(PreparedStatement.class));
 
-        SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, mockConfig, mockMigrator, null, hc -> mockDs);
-        clearInvocations(mockConn);
+        SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, mockConnectionConfig, mockMigrator, hc -> mockDs);
+        clearInvocations(conn);
 
         manager.executeSession(ctx -> {
             ctx.executeUpdate("SELECT 1");
             return null;
         });
 
-        verify(mockConn, times(1)).close();
-        // Ensure auto-commit was restored
-        verify(mockConn).setAutoCommit(true);
+        verify(conn, times(1)).close();
+        verify(conn).setAutoCommit(true);
     }
 
     @Test
     @DisplayName("Transaction should rollback if an exception occurs within the block")
     void testTransactionRollbackOnException() throws SQLException {
-        final HikariDataSource mockDs = mock(HikariDataSource.class);
-        Connection mockConn = mock(Connection.class);
-        when(mockDs.getConnection()).thenReturn(mockConn);
-        when(mockConn.prepareStatement(anyString())).thenReturn(mock(PreparedStatement.class));
+        HikariDataSource mockDs = mock(HikariDataSource.class);
+        Connection conn = mock(Connection.class);
+        when(mockDs.getConnection()).thenReturn(conn);
+        when(conn.prepareStatement(anyString())).thenReturn(mock(PreparedStatement.class));
 
-        SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, mockConfig, mockMigrator, null, hc -> mockDs);
-        clearInvocations(mockConn);
+        SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, mockConnectionConfig, mockMigrator, hc -> mockDs);
+        clearInvocations(conn);
 
-        assertThrows(DatabaseException.class, () -> {
-            manager.executeTransaction(ctx -> {
-                throw new RuntimeException("Simulated Failure");
-            });
-        });
+        assertThrows(DatabaseException.class, () ->
+                manager.executeTransaction(ctx -> { throw new RuntimeException("Simulated Failure"); })
+        );
 
-        verify(mockConn).rollback();
-        verify(mockConn, never()).commit();
+        verify(conn).rollback();
+        verify(conn, never()).commit();
     }
 
     @Test
-    @DisplayName("Repository Eviction on Reload Failure enables re-bootstrapping of repo instance")
-    void testRepositoryCacheEvictionOnReloadRegistryFailure() {
-        // Given a manager with a cached repository
-        RepositoryRegistry.RepositoryImplementorCandidate repoRepositoryCandidate = new RepositoryRegistry.RepositoryImplementorCandidate(
-                mockPlatformHandle,
-                999, List.of(FakeRepository.class), FakeRepositoryImpl.class
-        );
-        RepositoryRegistry mockRegistry = mock(RepositoryRegistry.class);
-        when(mockRegistry.getElectedRepositoryImplementorCandidate(FakeRepository.class)).thenReturn(repoRepositoryCandidate);
-        SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, mockConfig, mockMigrator, mockRegistry, mockHikariCreator);
+    @DisplayName("Repository cache eviction on reload failure enables re-bootstrapping")
+    void testRepositoryCacheEvictionOnReloadFailure() {
+        SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, mockConnectionConfig, mockMigrator, mockHikariCreator);
 
-        final FakeRepositoryImpl result1 = (FakeRepositoryImpl) manager.getRepository(FakeRepository.class);
+        FakeRepositoryImpl result1 = (FakeRepositoryImpl) manager.getRepository(FakeRepository.class, FakeRepositoryImpl.class);
         assertNotNull(result1);
-        assertSame(result1, manager.getRepository(FakeRepository.class));
+        assertSame(result1, manager.getRepository(FakeRepository.class, FakeRepositoryImpl.class));
         assertFalse(result1.invalidateCacheCalled);
 
-        // When reload is called and the second repository throws a RuntimeException.
+        // Poison so invalidateCaches() throws during reload
         result1.poisonInvalidateCache = true;
 
         manager.setSqlConnectionConfig(new MySqlConnectionConfig(
                 "10.0.50.99", 1324, "MockedTestDbV2", 6, "rot", "tot42"));
 
-        // Then the repository should be removed from repositoryInstances.
-        //  And the next call to getRepository should create a new instance.
         assertTrue(result1.invalidateCacheCalled);
-//        verify(repoRegistryCandidate, times(1)).createInstance(manager);  // no new ctor calls yet
 
-        final FakeRepositoryImpl result2 = (FakeRepositoryImpl) manager.getRepository(FakeRepository.class);
+        // The entry should have been evicted; next call creates a new instance
+        FakeRepositoryImpl result2 = (FakeRepositoryImpl) manager.getRepository(FakeRepository.class, FakeRepositoryImpl.class);
         assertNotNull(result2);
         assertNotSame(result1, result2);
-        assertSame(result2, manager.getRepository(FakeRepository.class));
-//        verify(repoRegistryCandidate, times(2)).createInstance(manager);  // one new ctor call total
+        assertSame(result2, manager.getRepository(FakeRepository.class, FakeRepositoryImpl.class));
     }
 
     @Test
-    @DisplayName("Repository Registry Flyweight Binding & Migration")
-    void testRepositoryDiscovery() throws Exception {
-        // Given a repository interface that is not yet in the cache.
-        RepositoryRegistry.RepositoryImplementorCandidate repoRepositoryCandidate = new RepositoryRegistry.RepositoryImplementorCandidate(
-                mockPlatformHandle,
-                999, List.of(FakeRepository.class), FakeRepositoryImpl.class
-        );
-        RepositoryRegistry mockRegistry = mock(RepositoryRegistry.class);
-        when(mockRegistry.getElectedRepositoryImplementorCandidate(FakeRepository.class)).thenReturn(repoRepositoryCandidate);
-        SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, mockConfig, mockMigrator, mockRegistry, mockHikariCreator);
+    @DisplayName("getRepository: flyweight — same impl twice returns same instance")
+    void testGetRepositoryFlyweight() {
+        SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, mockConnectionConfig, mockMigrator, mockHikariCreator);
 
-//        when(repoRegistryCandidate.createInstance(manager))
-//                .thenAnswer(call -> spy(new FakeRepositoryImpl(manager)));
+        FakeRepository repo1 = manager.getRepository(FakeRepository.class, FakeRepositoryImpl.class);
+        FakeRepository repo2 = manager.getRepository(FakeRepository.class, FakeRepositoryImpl.class);
 
-        // When getRepository is called.
-        final FakeRepository repo = manager.getRepository(FakeRepository.class);
+        assertNotNull(repo1);
+        assertInstanceOf(FakeRepositoryImpl.class, repo1);
+        assertSame(repo1, repo2, "Flyweight must return same instance");
+        verify(mockMigrator, times(1)).runMigrationsFor(FakeRepository.class); // migrations run only once
+    }
 
-        // Then it should query the RepositoryRegistry for the elected implementation.
-        //   And it should call schemaMigrator.migrate(instance) before adding it to the cache.
-        //   And it should instantiate the implementation using the (SqlDatabaseManager) constructor.
-        assertNotNull(repo);
-        assertInstanceOf(FakeRepositoryImpl.class, repo);
-        // Ensure migration ran before constructing
-//        InOrder order = inOrder(repoRegistryCandidate, mockMigrator);
-//        order.verify(mockMigrator).runMigrationsFor(FakeRepository.class);
-//        order.verify(repoRegistryCandidate).createInstance(manager);
-        verify(mockMigrator).runMigrationsFor(FakeRepository.class);
+    @Test
+    @DisplayName("getRepository: cache collision with different impl throws RepositoryInitializationException")
+    void testGetRepositoryCollisionThrows() {
+        SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, mockConnectionConfig, mockMigrator, mockHikariCreator);
 
-        // Second call should return cached instance
-        FakeRepository repo2 = manager.getRepository(FakeRepository.class);
-        assertSame(repo, repo2);
-        verify(mockMigrator, times(1)).runMigrationsFor(any()); // Migration should NOT run twice
+        manager.getRepository(FakeRepository.class, FakeRepositoryImpl.class);
+
+        // A second impl for the same api — cache key collision
+        assertThrows(Exception.class,
+                () -> manager.getRepository(FakeRepository.class, AltFakeRepositoryImpl.class));
+    }
+
+    /** Second impl of FakeRepository, used to test cache collision detection. */
+    static class AltFakeRepositoryImpl extends io.github.ensgijs.dbm.repository.AbstractRepository
+            implements FakeRepository {
+        public AltFakeRepositoryImpl(SqlClient c) { super(c); }
+        @Override public void put(int key, String value) {}
+        @Override public String get(int key) { return null; }
+        @Override public void clear() {}
     }
 }

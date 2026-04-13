@@ -1,27 +1,30 @@
 /**
- * Repository pattern with a plugin-friendly voting and election registry.
+ * Repository pattern with a service-locator registry and structured bootstrap lifecycle.
  *
  * <h2>Core Concepts</h2>
  * <dl>
  * <dt>{@link io.github.ensgijs.dbm.repository.Repository}</dt>
- * <dd>Marker interface for all repository types. Implementations obtain their database
- *     connection from a {@link io.github.ensgijs.dbm.sql.SqlDatabaseManager} and expose
- *     a cache-invalidation event.</dd>
+ * <dd>Base interface for all repository types.  Each concrete implementation must provide
+ *     a {@code constructor(SqlClient)} and implement exactly one
+ *     {@link io.github.ensgijs.dbm.repository.RepositoryApi}-annotated interface that
+ *     directly extends {@code Repository}.</dd>
  *
  * <dt>{@link io.github.ensgijs.dbm.repository.RepositoryApi}</dt>
- * <dd>Annotation required on every public-facing repository interface. Declares which
- *     migration areas the interface depends on.</dd>
+ * <dd>Annotation required on every public-facing repository interface.  Declares which
+ *     migration areas the interface depends on.  Must be placed on an interface that
+ *     directly extends {@code Repository}; API inheritance chains are not supported.</dd>
  *
  * <dt>{@link io.github.ensgijs.dbm.repository.AbstractRepository}</dt>
- * <dd>Convenience base class providing a logger, the database manager reference, and a
+ * <dd>Convenience base class providing a logger, a {@code SqlClient} reference, and a
  *     thread-safe cache-invalidation event implementation.</dd>
  *
  * <dt>{@link io.github.ensgijs.dbm.repository.RepositoryRegistry}</dt>
- * <dd>Central singleton (or scoped instance) that manages the bootstrap lifecycle.
- *     During the <em>voting phase</em>, plugins nominate implementations and providers.
+ * <dd>Central service-locator (singleton or scoped) managing the bootstrap lifecycle.
+ *     During the <em>configure phase</em>, plugins publish provider
+ *     {@link io.github.ensgijs.dbm.sql.SqlDatabaseManager} instances.
  *     After {@link io.github.ensgijs.dbm.repository.RepositoryRegistry#closeRegistration()}
- *     is called, the winners are elected and repositories become available via
- *     {@link io.github.ensgijs.dbm.repository.RepositoryRegistry#getDefaultRepository(Class)}.</dd>
+ *     completes, repositories are accessible via
+ *     {@link io.github.ensgijs.dbm.repository.RepositoryRegistry#get(Class)}.</dd>
  *
  * <dt>{@link io.github.ensgijs.dbm.repository.RepositoryComposition}</dt>
  * <dd>Aggregates multiple {@link io.github.ensgijs.dbm.repository.Repository} instances into
@@ -31,19 +34,22 @@
  * <h2>Bootstrap Lifecycle</h2>
  * <ol>
  * <li>Each plugin calls {@link io.github.ensgijs.dbm.repository.RepositoryRegistry#register}
- *     and configures an {@code onConfigure} callback to nominate providers and implementations.</li>
- * <li>After all plugins have registered, {@code closeRegistration()} is called. Elections are
- *     resolved and {@code onPrepare} / {@code onReady} callbacks fire on a virtual thread.</li>
- * <li>Repositories are accessed via {@code getDefaultRepository(Class)} or directly from a
- *     {@link io.github.ensgijs.dbm.sql.SqlDatabaseManager}.</li>
+ *     and configures an {@code onConfigure} callback to publish providers and register
+ *     compositions.</li>
+ * <li>After all plugins have registered, {@code closeRegistration()} is called.  Provider
+ *     contests are resolved and {@code onReady} callbacks fire on a virtual thread.</li>
+ * <li>Repositories are accessed via {@link io.github.ensgijs.dbm.repository.RepositoryRegistry#get(Class)}
+ *     or directly from a {@link io.github.ensgijs.dbm.sql.SqlDatabaseManager}.</li>
  * </ol>
  *
  * <h2>Implementation Discovery</h2>
  * <p>
  * Concrete implementations are auto-discovered from classpath resources under
- * {@code db/registry/}. Each file's name must be the fully-qualified class name of a
- * concrete {@link io.github.ensgijs.dbm.repository.Repository} implementation.
- * Implementations may also be nominated programmatically via the {@code onConfigure} callback.
+ * {@code db/registry/}.  Each file's <b>name</b> must be the fully-qualified class name of
+ * the {@link io.github.ensgijs.dbm.repository.RepositoryApi}-annotated interface, and the
+ * file's <b>content</b> must be the fully-qualified class name of the concrete implementation.
+ * Bindings may also be declared programmatically via
+ * {@link io.github.ensgijs.dbm.repository.RepositoryRegistry.RegistrationBootstrappingContext#bindImpl}.
  * </p>
  */
 package io.github.ensgijs.dbm.repository;

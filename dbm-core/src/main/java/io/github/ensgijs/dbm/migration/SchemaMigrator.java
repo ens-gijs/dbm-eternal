@@ -2,7 +2,7 @@ package io.github.ensgijs.dbm.migration;
 
 import io.github.ensgijs.dbm.sql.DatabaseException;
 import io.github.ensgijs.dbm.sql.ExecutionContext;
-import io.github.ensgijs.dbm.sql.SqlDatabaseManager;
+import io.github.ensgijs.dbm.sql.SqlClient;
 import io.github.ensgijs.dbm.sql.SqlDialect;
 import io.github.ensgijs.dbm.sql.SqlStatementSplitter;
 import io.github.ensgijs.dbm.repository.Repository;
@@ -30,7 +30,7 @@ import java.util.logging.Logger;
 public final class SchemaMigrator {
     private final static Logger logger = Logger.getLogger("SchemaMigrator");
 
-    private final SqlDatabaseManager manager;
+    private final SqlClient client;
     /// Cache: Name -> Set of applied version timestamps
     private final Map<String, Set<Long>> appliedCache = new ConcurrentHashMap<>();
     private final MigrationProvider migrationProvider;
@@ -42,20 +42,19 @@ public final class SchemaMigrator {
     }
 
     /**
-     * Construction of this object may occur before {@link SqlDatabaseManager} is fully
+     * Construction of this object may occur before {@link SqlClient} is fully
      * initialized. To support this case, {@link #refreshVersionCache()} must be called
-     * manually only after {@link SqlDatabaseManager} is able to provide a connection.
+     * manually only after {@link SqlClient} is able to provide a connection.
      *
-     * @param manager The manager providing database connectivity and dialect information.
+     * @param client The client providing database connectivity and dialect information.
      */
-    public SchemaMigrator(SqlDatabaseManager manager) {
-        // Default constructor uses the real loader
-        this(manager, MigrationLoader::getMigrations);
+    public SchemaMigrator(SqlClient client) {
+        this(client, MigrationLoader::getMigrations);
     }
 
     @VisibleForTesting
-    SchemaMigrator(SqlDatabaseManager manager, MigrationProvider provider) {
-        this.manager = manager;
+    SchemaMigrator(SqlClient client, MigrationProvider provider) {
+        this.client = client;
         this.migrationProvider = provider;
     }
 
@@ -67,7 +66,7 @@ public final class SchemaMigrator {
      */
     private void ensureHistoryTable() throws DatabaseException {
         // We use LONG/BIGINT for version to support timestamps
-        String sql = manager.activeDialect() == SqlDialect.MYSQL
+        String sql = client.activeDialect() == SqlDialect.MYSQL
                 ? """
                   CREATE TABLE IF NOT EXISTS SchemaMigrations (
                       name VARCHAR(128),
@@ -82,12 +81,12 @@ public final class SchemaMigrator {
                       applied_at INTEGER,
                       PRIMARY KEY (name, version)
                   )""";
-        manager.executeUpdate(sql);
+        client.executeUpdate(sql);
     }
 
     /**
      * Ensures the {@code SchemaMigrations} table exists and populates the {@link #appliedCache} from it.
-     * This is called during initialization and upon a {@link SqlDatabaseManager} config reload which
+     * This is called during initialization and upon a {@link SqlClient} config reload which
      * has invalidated the existing connection.
      * @throws DatabaseException If the SELECT query fails.
      */
@@ -95,7 +94,7 @@ public final class SchemaMigrator {
         long start = System.currentTimeMillis();
         appliedCache.clear();
         ensureHistoryTable();
-        manager.executeQuery("SELECT name, version FROM SchemaMigrations", rs -> {
+        client.executeQuery("SELECT name, version FROM SchemaMigrations", rs -> {
             if (rs != null) {  // may be null in test environment when using mocks
                 while (rs.next()) {
                     appliedCache.computeIfAbsent(rs.getString(1), k -> new HashSet<>()).add(rs.getLong(2));
@@ -108,42 +107,21 @@ public final class SchemaMigrator {
 
     /**
      * Checks for and applies migrations declared on the repository interface.
+     * <p>
+     * The {@code repoInterface} must be annotated with {@link RepositoryApi} and directly
+     * extend {@link Repository}. Migration names are read from the annotation's {@code value()} array.
+     * </p>
      * @param repoInterface The interface to inspect for {@link RepositoryApi}.
      * @throws IllegalArgumentException If the annotation is missing.
      */
     public <I extends Repository> void runMigrationsFor(Class<I> repoInterface) {
         RepositoryApi annot = repoInterface.getAnnotation(RepositoryApi.class);
-
         if (annot == null) {
             throw new IllegalArgumentException(
                     "Repository interface " + repoInterface.getName() + " must be annotated with @RepositoryApi.");
         }
-
-        Set<String> allNames = new LinkedHashSet<>();
-        collectMigrationNames(repoInterface, allNames);
-
-        // Execute in order of most distant ancestor first.
-        for (String name :  allNames.stream().toList().reversed()) {
+        for (String name : Repository.collectMigrationNames(repoInterface)) {
             migrate(name);
-        }
-    }
-
-    /**
-     * Helper to recursively collect migration names from the hierarchy.
-     */
-    @VisibleForTesting
-    void collectMigrationNames(Class<?> clazz, Set<String> collected) {
-        RepositoryApi annot = clazz.getAnnotation(RepositoryApi.class);
-        if (annot != null) {
-            Arrays.stream(annot.value())
-                    .filter(s -> s != null && !s.isBlank())
-                    .collect(() -> collected, Set::add, Set::addAll);
-        }
-
-        if (annot == null || annot.inheritMigrations()) {
-            for (Class<?> parent : clazz.getInterfaces()) {
-                collectMigrationNames(parent, collected);
-            }
         }
     }
 
@@ -161,10 +139,10 @@ public final class SchemaMigrator {
      * @throws DatabaseException If a migration fails or a dependency is missing/cyclic.
      */
     public void migrate(String targetName) throws DatabaseException {
-        var requiredMigrations = migrationProvider.getMigrations(manager.activeDialect(), targetName).stream()
+        var requiredMigrations = migrationProvider.getMigrations(client.activeDialect(), targetName).stream()
                 .filter(this::isPending).toList();
         if (!requiredMigrations.isEmpty()) {
-            manager.executeTransaction(ctx -> {
+            client.executeTransaction(ctx -> {
                 requiredMigrations.forEach(m -> executeMigration(ctx, m));
                 return null;
             });

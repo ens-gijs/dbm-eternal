@@ -15,45 +15,77 @@ import org.jetbrains.annotations.VisibleForTesting;
 
 import java.io.IOException;
 import java.lang.reflect.Constructor;
-import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Modifier;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Consumer;
+import java.util.function.BiFunction;
 import java.util.logging.Logger;
 
 /**
- * A central registry that manages the election of default {@link Repository} API implementation mappings and
- * provides {@link #getDefaultRepository(Class)} to provide centralized access to {@link Repository}'s
- * hosted across plugins and databases.
- * <p>
- * You have the option of using the {@link #globalRegistry()} instance or creating a {@link RepositoryRegistry}
- * instance having its own lifecycle.
- * </p>
- * <p>
- * Additionally, this class facilitates a "voting" system where multiple plugins can provide nominations for competing
- * implementations for the same Repository interface during the bootstrapping phase. This allows one plugin to
- * substitute its own implementation of any {@link Repository} to be used by all plugins.
- * </p>
+ * A service-locator registry that binds {@link Repository} API interfaces to provider
+ * {@link SqlDatabaseManager} instances and implementation classes.
+ *
+ * <h2>Lifecycle</h2>
+ * <ol>
+ * <li><b>Scanning phase</b> – call {@link #register(PlatformHandle, ClassLoader)} (or its plugin-object
+ *     overload) for each plugin/module during server startup.  This scans the classpath for
+ *     {@code db/registry/} resources (filename&nbsp;= api FQCN, content&nbsp;= impl FQCN) and
+ *     {@code db/migrations/} resources, then returns a {@link RegistrationHelper} for configuring
+ *     lifecycle callbacks.</li>
+ * <li><b>Configure phase</b> – the {@link RegistrationHelper#onConfigure(ThrowingConsumer)} callback
+ *     is invoked in dependency order.  Use {@link RegistrationBootstrappingContext#publish} to
+ *     register {@link SqlDatabaseManager} providers and
+ *     {@link RegistrationBootstrappingContext#registerComposition} to register
+ *     {@link RepositoryComposition} aggregators.</li>
+ * <li><b>Ready phase</b> – call {@link #closeRegistration()} (or the overload accepting a
+ *     {@code conflictResolver}).  Provider conflicts from {@link PublishMode#CONTEST CONTEST}
+ *     publications are resolved, then {@link RegistrationHelper#onReady(ThrowingConsumer)} callbacks
+ *     are invoked, after which the registry is fully operational.</li>
+ * </ol>
+ *
+ * <h2>Accessing repositories after registration</h2>
+ * <ul>
+ * <li>{@link #get(Class)} – retrieves the resolved repository instance; throws if not found.</li>
+ * <li>{@link #find(Class)} – retrieves as {@link Optional}; empty if not published.</li>
+ * <li>{@link #isProvidedBy(Class, SqlDatabaseManager)} – checks which manager owns an api.</li>
+ * </ul>
+ *
+ * <p>You may use the {@link #globalRegistry()} singleton or create isolated instances for testing.</p>
+ *
+ * @see Repository
+ * @see RepositoryApi
+ * @see RepositoryComposition
  */
 public final class RepositoryRegistry {
     public static final String DB_REGISTRY_RESOURCE_PATH = "db/registry/";
-    // private final static Logger logger = Logger.getLogger("RepositoryRegistry");
+
     private static RepositoryRegistry globalRegistryInstance;
     private static OneShotConsumableSubscribableEvent<RepositoryRegistry> onGlobalRegistryCreatedEvent;
 
     private final ResourceWalker resourceWalker;
-    private volatile boolean votingClosed = false;
+    private volatile boolean registrationClosed = false;
     private Queue<RegistrationHelper> pendingRegistrations = new ConcurrentLinkedQueue<>();
 
-    private final BallotBox<RepositoryImplementorCandidate, Repository> apiImplementorsBallotBox = new BallotBox<>();
-    private final BallotBox<RepositoryProviderCandidate, Repository> defaultProvidersBallotBox = new BallotBox<>();
-    private final BallotBox<RepositoryCompositionCandidate, RepositoryComposition> compositionsBallotBox = new BallotBox<>();
+    /// api class → impl class (populated from {@code db/registry/} resource files during scan)
+    private final Map<Class<? extends Repository>, Class<? extends Repository>> implBindings = new HashMap<>();
 
-    /// Flyweight Storage: API/Class -> Singleton Instance
+    /// api class → list of ProviderEntries (populated via {@link #publish} during onConfigure)
+    private final Map<Class<? extends Repository>, List<ProviderEntry>> contestantProviders = new LinkedHashMap<>();
+
+    /// Resolved after {@link #closeRegistration}: api class → winning SqlDatabaseManager
+    private volatile Map<Class<? extends Repository>, SqlDatabaseManager> resolvedProviders = null;
+
+    /// Flyweight storage for composition instances: class → singleton
     private final Map<Class<? extends RepositoryComposition>, RepositoryComposition> compositeInstances = new HashMap<>();
+    /// Registered composition creators: concrete class → creator function
+    private final Map<Class<? extends RepositoryComposition>, ThrowingFunction<RepositoryRegistry, ? extends RepositoryComposition>> compositionCreators = new HashMap<>();
+
+    // -----------------------------------------------------------------------
+    // Singleton global registry
+    // -----------------------------------------------------------------------
 
     /**
      * @return The singleton global {@link RepositoryRegistry} instance.
@@ -77,9 +109,13 @@ public final class RepositoryRegistry {
         return globalRegistryInstance != null;
     }
 
+    // -----------------------------------------------------------------------
+    // Construction
+    // -----------------------------------------------------------------------
+
     @FunctionalInterface
     @VisibleForTesting
-    interface ResourceWalker {
+    public interface ResourceWalker {
         void visit(
                 @NotNull final ClassLoader classLoader,
                 @NotNull final String rootPath,
@@ -92,119 +128,171 @@ public final class RepositoryRegistry {
     }
 
     @VisibleForTesting
-    RepositoryRegistry(ResourceWalker resourceWalker) {
+    public RepositoryRegistry(ResourceWalker resourceWalker) {
         this.resourceWalker = resourceWalker;
     }
 
+    // -----------------------------------------------------------------------
+    // State queries
+    // -----------------------------------------------------------------------
+
+    /** Returns {@code true} while {@link #register} may still be called. */
+    public boolean isAcceptingRegistrations() {
+        return !registrationClosed;
+    }
+
+    /** @deprecated Use {@link #isAcceptingRegistrations()} */
+    @Deprecated(forRemoval = true)
     public boolean isAcceptingNominations() {
-        return !votingClosed;
+        return isAcceptingRegistrations();
     }
 
+    /** Returns {@code true} after {@link #closeRegistration()} completes. */
     public boolean isReady() {
-        return votingClosed;
+        return registrationClosed;
     }
 
-    public static final class RegistrationHelper implements Comparable<RegistrationHelper> {
-        private static final AtomicInteger ORDINAL_PROVIDER = new AtomicInteger();
-        private final int ordinal;
-        private final @NotNull PlatformHandle platformHandle;
-        private @Nullable ThrowingConsumer<RegistrationBootstrappingContext> onConfigure;
-        private @Nullable ThrowingConsumer<RepositoryRegistry> onPrepare;
-        private @Nullable ThrowingConsumer<RepositoryRegistry> onReady;
-        private boolean mutable = true;
+    // -----------------------------------------------------------------------
+    // Provider publication
+    // -----------------------------------------------------------------------
 
-        private RegistrationHelper(@NotNull PlatformHandle platformHandle) {
-            this.ordinal = ORDINAL_PROVIDER.incrementAndGet();
-            this.platformHandle = platformHandle;
+    /**
+     * Defines whether a {@link #publish} call may be contested by another caller.
+     */
+    public enum PublishMode {
+        /**
+         * Only one provider may claim this api. A second {@code publish} for the same api throws
+         * {@link RepositoryInitializationException} immediately.
+         */
+        EXCLUSIVE,
+        /**
+         * Multiple providers may contest for this api. The winner is determined by the
+         * {@code conflictResolver} passed to {@link #closeRegistration(BiFunction)}.
+         * If {@code closeRegistration()} is called without a resolver and a contest exists,
+         * it completes exceptionally.
+         */
+        CONTEST
+    }
+
+    private record ProviderEntry(@NotNull SqlDatabaseManager manager, @NotNull PublishMode mode) {}
+
+    /**
+     * Registers {@code manager} as the exclusive provider for {@code api}.
+     * <p>Must be called from an {@link RegistrationHelper#onConfigure} callback.</p>
+     *
+     * @throws RepositoryInitializationException If another provider has already been published for this api.
+     * @throws IllegalStateException             If registration has already been closed.
+     */
+    public <T extends Repository> void publish(
+            @NotNull Class<T> api,
+            @NotNull SqlDatabaseManager manager
+    ) throws RepositoryInitializationException {
+        publish(api, manager, PublishMode.EXCLUSIVE);
+    }
+
+    /**
+     * Registers {@code manager} as a provider for {@code api} with the specified {@code mode}.
+     * <p>Must be called from an {@link RegistrationHelper#onConfigure} callback.</p>
+     *
+     * @throws RepositoryInitializationException If {@code mode} is {@link PublishMode#EXCLUSIVE} and another
+     *                                           provider has already been published for this api, or if the
+     *                                           existing publication was {@code EXCLUSIVE}.
+     * @throws IllegalStateException             If registration has already been closed.
+     */
+    public synchronized <T extends Repository> void publish(
+            @NotNull Class<T> api,
+            @NotNull SqlDatabaseManager manager,
+            @NotNull PublishMode mode
+    ) throws RepositoryInitializationException {
+        if (registrationClosed) throw new IllegalStateException("Registration is closed!");
+        validateRepositoryApi(api);
+
+        var list = contestantProviders.computeIfAbsent(api, k -> new ArrayList<>());
+        if (!list.isEmpty()) {
+            var existing = list.getFirst();
+            if (mode == PublishMode.EXCLUSIVE || existing.mode() == PublishMode.EXCLUSIVE) {
+                throw new RepositoryInitializationException(
+                        "Exclusive publish conflict for " + api.getName()
+                                + ": already published by " + existing.manager().getSqlConnectionConfig().connectionId());
+            }
         }
+        list.add(new ProviderEntry(manager, mode));
+    }
 
-        public RegistrationHelper onConfigure(ThrowingConsumer<RegistrationBootstrappingContext> op) {
-            if (!mutable) throw new IllegalStateException();
-            this.onConfigure = op;
-            return this;
-        }
+    /**
+     * Programmatically overrides the impl binding for {@code api}, replacing any resource-file
+     * declaration.  Must be called before {@link #closeRegistration()}.
+     *
+     * @throws IllegalStateException If registration has already been closed.
+     */
+    public synchronized <T extends Repository> void bindImpl(
+            @NotNull Class<T> api,
+            @NotNull Class<? extends T> implClass
+    ) {
+        if (registrationClosed) throw new IllegalStateException("Registration is closed!");
+        validateRepositoryApi(api);
+        implBindings.put(api, implClass);
+    }
 
-        public RegistrationHelper onPrepare(ThrowingConsumer<RepositoryRegistry> op) {
-            if (!mutable) throw new IllegalStateException();
-            this.onPrepare = op;
-            return this;
-        }
+    // -----------------------------------------------------------------------
+    // Repository access (post-registration)
+    // -----------------------------------------------------------------------
 
-        public RegistrationHelper onReady(ThrowingConsumer<RepositoryRegistry> op) {
-            if (!mutable) throw new IllegalStateException();
-            this.onReady = op;
-            return this;
-        }
+    /**
+     * Returns the resolved repository instance for {@code api}.
+     *
+     * @throws IllegalStateException          If {@link #isReady()} is {@code false}.
+     * @throws RepositoryNotRegisteredException If no provider was published for this api.
+     */
+    @SuppressWarnings("unchecked")
+    public <I extends Repository> @NotNull I get(@NotNull Class<I> api) {
+        if (!registrationClosed) throw new IllegalStateException("Registration has not yet been closed!");
+        var manager = resolvedProviders.get(api);
+        if (manager == null) throw new RepositoryNotRegisteredException(api);
+        var implClass = (Class<? extends I>) implBindings.get(api);
+        if (implClass == null) throw new RepositoryNotRegisteredException(
+                "No impl binding found for " + api.getName() + ". Declare one in db/registry/ or call bindImpl().");
+        return manager.getRepository(api, implClass);
+    }
 
-        @Override
-        public int compareTo(@NotNull RegistrationHelper that) {
-            if (this == that) return 0;
-            int depComp = PlatformHandle.dependencyComparator(this.platformHandle, that.platformHandle);
-            return depComp != 0 ? depComp : Integer.compare(this.ordinal, that.ordinal);
+    /**
+     * Returns an {@link Optional} containing the resolved repository, or empty if not published.
+     *
+     * @throws IllegalStateException If {@link #isReady()} is {@code false}.
+     */
+    public <I extends Repository> @NotNull Optional<I> find(@NotNull Class<I> api) {
+        if (!registrationClosed) throw new IllegalStateException("Registration has not yet been closed!");
+        if (!resolvedProviders.containsKey(api)) return Optional.empty();
+        try {
+            return Optional.of(get(api));
+        } catch (RepositoryNotRegisteredException ex) {
+            return Optional.empty();
         }
     }
 
-
-    public static final class RegistrationBootstrappingContext {
-        private final @NotNull RepositoryRegistry registry;
-        private final @NotNull PlatformHandle platformHandle;
-
-        private RegistrationBootstrappingContext(@NotNull RepositoryRegistry registry, @NotNull PlatformHandle platformHandle) {
-            this.registry = registry;
-            this.platformHandle = platformHandle;
-        }
-
-        public @NotNull RepositoryRegistry registry() {
-            return registry;
-        }
-
-        public @NotNull PlatformHandle platformHandle() {
-            return platformHandle;
-        }
-
-        /**
-         * Nominates a preferred {@link SqlDatabaseManager} for hosting the specified repositoryApiType.<br/>
-         * Nominations may be overridden by higher priority event handlers.
-         * <p>
-         * Default repository instances can be retrieved from {@link RepositoryRegistry#getDefaultRepository(Class)}
-         * after bootstrapping is complete.
-         * </p>
-         *
-         * @param repositoryApiType Repository API interface type. This must not be a concretion and must have the {@link RepositoryApi}.
-         * @param preferredManager  The preferred {@link SqlDatabaseManager} instance to used to access the repositories' data.
-         */
-        public <T extends Repository> void nominateDefaultProvider(@NotNull Class<T> repositoryApiType, @NotNull SqlDatabaseManager preferredManager) throws RepositoryInitializationException {
-            registry.nominateDefaultProvider(repositoryApiType, preferredManager);
-        }
-
-        /**
-         * Nominates a preferred implementation class for the specified repositoryImplementationType.<br/>
-         * Allows for the overriding of {@code resources/db/registry/..} implementation mappings.<br/>
-         * You do not need to repeat mappings already declared via {@code resources/db/registry/..}<br/>
-         */
-        public <I extends Repository> void nominateImplementation(@NotNull Class<? extends I> repositoryImplementationType, int priority) throws RepositoryInitializationException {
-            registry.nominateRepositoryImplementation(platformHandle, repositoryImplementationType, priority);
-        }
-
-        /**
-         * Nominates a composite for the registry. Overwrites any previous nomination for the same implementation tree.
-         */
-        public <T extends RepositoryComposition> void nominateRepositoryComposition(
-                @NotNull Class<T> implementationClass
-        ) {
-            registry.nominateRepositoryComposition(platformHandle, implementationClass);
-        }
-
-        /**
-         * Nominates a composite for the registry. Overwrites any previous nomination for the same implementation tree.
-         */
-        public <T extends RepositoryComposition> void nominateRepositoryComposition(
-                @NotNull Class<T> implementationClass,
-                @NotNull ThrowingFunction<@NotNull RepositoryRegistry, @NotNull T> creator
-        ) {
-            registry.nominateRepositoryComposition(platformHandle, implementationClass, creator);
-        }
+    /**
+     * Returns {@code true} if {@code manager} is the resolved provider for {@code api}.
+     */
+    public boolean isProvidedBy(@NotNull Class<? extends Repository> api, @NotNull SqlDatabaseManager manager) {
+        if (!registrationClosed) return false;
+        return manager.equals(resolvedProviders.get(api));
     }
+
+    /**
+     * Returns the impl class bound to {@code api}, for use by {@link SqlDatabaseManager#getRepository(Class, RepositoryRegistry)}.
+     *
+     * @throws RepositoryNotRegisteredException If no impl binding was declared for this api.
+     */
+    public @NotNull Class<? extends Repository> findImplementation(@NotNull Class<? extends Repository> api) {
+        var impl = implBindings.get(api);
+        if (impl == null) throw new RepositoryNotRegisteredException(
+                "No impl binding found for " + api.getName() + ". Declare one in db/registry/ or call bindImpl().");
+        return impl;
+    }
+
+    // -----------------------------------------------------------------------
+    // Registration lifecycle
+    // -----------------------------------------------------------------------
 
     /**
      * Scans the given plugin object's classpath for migration and registry resources and
@@ -222,7 +310,8 @@ public final class RepositoryRegistry {
      * @throws MigrationParseException           If any migration file cannot be parsed.
      * @throws IllegalStateException             If registration has already been closed.
      */
-    public RegistrationHelper register(@NotNull PlatformHandle platformHandle, @NotNull Object plugin) throws RepositoryInitializationException, MigrationParseException {
+    public RegistrationHelper register(@NotNull PlatformHandle platformHandle, @NotNull Object plugin)
+            throws RepositoryInitializationException, MigrationParseException {
         return register(platformHandle, plugin.getClass().getClassLoader());
     }
 
@@ -236,8 +325,9 @@ public final class RepositoryRegistry {
      * @throws MigrationParseException           If any migration file cannot be parsed.
      * @throws IllegalStateException             If registration has already been closed.
      */
-    public RegistrationHelper register(@NotNull PlatformHandle platformHandle, @NotNull ClassLoader scope) throws RepositoryInitializationException, MigrationParseException {
-        if (votingClosed) throw new IllegalStateException("Registration is closed!");
+    public RegistrationHelper register(@NotNull PlatformHandle platformHandle, @NotNull ClassLoader scope)
+            throws RepositoryInitializationException, MigrationParseException {
+        if (registrationClosed) throw new IllegalStateException("Registration is closed!");
         scanPlugin(platformHandle, scope);
         RegistrationHelper helper = new RegistrationHelper(platformHandle);
         pendingRegistrations.add(helper);
@@ -245,24 +335,53 @@ public final class RepositoryRegistry {
     }
 
     /**
-     * Resolves all conflicts and determines the winner for every repository type.
-     * <p>Registration onConfigure and onReady callbacks are run in a background thread.</p>
-     * @return If the returned future contains TRUE then all requested registrations completed successfully.
-     * Only a single call will ever see TRUE. FALSE is returned for all calls which came after the first.
-     * <p>Completes exceptionally if there was an error executing any registrations onConfigure or onReady callbacks,
-     * all registrations will have had a chance for their onConfigure and onReady events to be called even if
-     * an earlier registration threw. However, if a registrations onConfigure throws then its onReady will not be
-     * called.</p>
+     * Closes registration and runs lifecycle callbacks.  Equivalent to
+     * {@link #closeRegistration(BiFunction) closeRegistration(null)}.
+     * <p>
+     * If any {@link PublishMode#CONTEST CONTEST} conflicts exist and no resolver was supplied,
+     * the returned future completes exceptionally.
+     * </p>
+     */
+    public CompletableFuture<Boolean> closeRegistration() {
+        return closeRegistration(null);
+    }
+
+    /**
+     * Closes registration, resolves contested providers, and runs lifecycle callbacks.
+     * <p>
+     * Steps:
+     * <ol>
+     * <li>Marks registration as closed (returns {@code false} future if already closed).</li>
+     * <li>Runs all {@link RegistrationHelper#onConfigure} callbacks in dependency order on a
+     *     virtual thread.</li>
+     * <li>Resolves contested providers using {@code conflictResolver}; if there are unresolved
+     *     contests and no resolver was supplied the future completes exceptionally.</li>
+     * <li>Runs all {@link RegistrationHelper#onReady} callbacks in dependency order.</li>
+     * </ol>
+     *
+     * @param conflictResolver Called for each contested api with the list of provider managers.
+     *                         Must return a non-null winner from that list, or {@code null} to
+     *                         reject all (which causes the future to complete exceptionally).
+     *                         May be {@code null} if no contests are expected.
+     * @return A future that resolves to {@code true} on the first successful close, {@code false}
+     *         on any subsequent call, or completes exceptionally on error.
      */
     @VisibleForTesting
-    public synchronized CompletableFuture<Boolean> closeRegistration() {
-        if (votingClosed) return CompletableFuture.completedFuture(false);
-        votingClosed = true;
+    public synchronized CompletableFuture<Boolean> closeRegistration(
+            @Nullable BiFunction<Class<? extends Repository>, List<SqlDatabaseManager>, SqlDatabaseManager> conflictResolver
+    ) {
+        if (registrationClosed) return CompletableFuture.completedFuture(false);
+        registrationClosed = true;
+
         final CompletableFuture<Boolean> future = new CompletableFuture<>();
         final List<RegistrationHelper> registrations = new LinkedList<>(this.pendingRegistrations);
         this.pendingRegistrations = null;
+        registrations.sort(null);
+
         Thread.ofVirtual().start(() -> {
             RepositoryInitializationException err = null;
+
+            // Phase 1: onConfigure (dependency order, already sorted)
             var iter = registrations.listIterator();
             while (iter.hasNext()) {
                 var r = iter.next();
@@ -271,142 +390,136 @@ public final class RepositoryRegistry {
                     try {
                         r.onConfigure.accept(new RegistrationBootstrappingContext(this, r.platformHandle));
                     } catch (Throwable ex) {
-                        if (err == null) err = new RepositoryInitializationException("Error while executing RegistrationHelper(s).");
+                        if (err == null) err = new RepositoryInitializationException("Error in onConfigure.");
                         err.addSuppressed(ex);
-                        iter.remove();
+                        iter.remove(); // exclude from onReady since configure failed
                     }
                 }
             }
-            iter = registrations.listIterator();
-            while (iter.hasNext()) {
-                var r = iter.next();
-                r.mutable = false;
-                if (r.onPrepare != null) {
-                    try {
-                        r.onPrepare.accept(this);
-                    } catch (Throwable ex) {
-                        if (err == null) err = new RepositoryInitializationException("Error while executing RegistrationHelper(s).");
-                        err.addSuppressed(ex);
-                        iter.remove();
+
+            // Phase 1.5: Resolve contested providers
+            Map<Class<? extends Repository>, SqlDatabaseManager> resolved = new HashMap<>();
+            for (var entry : contestantProviders.entrySet()) {
+                var contestants = entry.getValue();
+                if (contestants.size() == 1) {
+                    resolved.put(entry.getKey(), contestants.getFirst().manager());
+                } else {
+                    // Multiple CONTEST entries — need conflict resolution
+                    if (conflictResolver == null) {
+                        var e = new RepositoryInitializationException(
+                                "Contest conflict for " + entry.getKey().getName()
+                                        + " but no conflictResolver was provided to closeRegistration().");
+                        if (err == null) err = e; else err.addSuppressed(e);
+                    } else {
+                        var managers = contestants.stream().map(ProviderEntry::manager).toList();
+                        try {
+                            var winner = conflictResolver.apply(entry.getKey(), managers);
+                            if (winner == null || !managers.contains(winner)) {
+                                var e = new RepositoryInitializationException(
+                                        "conflictResolver returned an invalid winner for " + entry.getKey().getName());
+                                if (err == null) err = e; else err.addSuppressed(e);
+                            } else {
+                                resolved.put(entry.getKey(), winner);
+                            }
+                        } catch (Throwable ex) {
+                            var e = new RepositoryInitializationException(
+                                    "conflictResolver threw for " + entry.getKey().getName(), ex);
+                            if (err == null) err = e; else err.addSuppressed(e);
+                        }
                     }
                 }
             }
+            resolvedProviders = Collections.unmodifiableMap(resolved);
+
+            // Phase 2: onReady
             for (var r : registrations) {
                 if (r.onReady != null) {
-                    try {
-                        r.onReady.accept(this);
-                    } catch (Throwable ex) {
-                        if (err == null) err = new RepositoryInitializationException("Error while executing RegistrationHelper(s).");
-                        err.addSuppressed(ex);
+                    if (r.readyExecutor != null) {
+                        // Async: errors are logged but cannot be propagated into the future
+                        ThrowingConsumer<RepositoryRegistry> onReady = r.onReady;
+                        r.readyExecutor.execute(() -> {
+                            try {
+                                onReady.accept(this);
+                            } catch (Throwable ex) {
+                                Logger.getLogger("RepositoryRegistry").severe(
+                                        "onReady threw for " + r.platformHandle.name() + ": " + ex);
+                            }
+                        });
+                    } else {
+                        try {
+                            r.onReady.accept(this);
+                        } catch (Throwable ex) {
+                            if (err == null) err = new RepositoryInitializationException("Error in onReady.");
+                            err.addSuppressed(ex);
+                        }
                     }
                 }
             }
+
             if (err != null) future.completeExceptionally(err);
             else future.complete(true);
         });
+
         return future;
     }
 
-    /**
-     * Checks if a default provider has been nominated and elected for the given repository type.
-     *
-     * @param <I>            The repository interface type.
-     * @param repositoryType The class literal of the repository interface to check.
-     * @return {@code true} if a {@link SqlDatabaseManager} has been nominated as the
-     * default provider for this type; {@code false} otherwise.
-     * @apiNote This method may be called both before and after voting has closed. It's the callers responsibility to
-     * check either {@link #isReady()} or {@link #isAcceptingNominations()} to act intelligently.
-     */
-    public <I extends Repository> boolean hasDefaultRepository(@NotNull Class<I> repositoryType) {
-        return defaultProvidersBallotBox.containsKey(repositoryType);
-    }
+    // -----------------------------------------------------------------------
+    // Plugin scanning
+    // -----------------------------------------------------------------------
 
     /**
-     * Retrieves the repository instance from the default provider assigned to the given type.
+     * Scans a plugin's classpath for repository registry resources and migrations.
      * <p>
-     * In a multi-database environment, different {@link SqlDatabaseManager} instances may
-     * register themselves as the "provider" for specific repository interfaces. This method
-     * bridges the gap between the global registry and the specific manager owning the data.
-     * </p>
-     * <p>
-     * <b>Note:</b> This requires that a default provider was nominated while voting was for this {@code repositoryType}.
-     * </p>
-     *
-     * @param <I>            The specific interface type extending {@link Repository}.
-     * @param repositoryType The class literal of the repository interface to retrieve.
-     * @return The instantiated and ready to use repository instance from the default manager,
-     * or {@code null} if no default provider has been assigned to this type.
-     * @throws IllegalStateException If {@link #isReady()} would return false (voting phase not yet complete).
-     * @apiNote Check {@link #isReady()} before calling.
-     */
-    public synchronized @Nullable <I extends Repository> I getDefaultRepository(@NotNull Class<I> repositoryType) {
-        if (!votingClosed) throw new IllegalStateException("Voting has not yet been closed!");
-        var candidate = defaultProvidersBallotBox.getWinner(repositoryType);
-        return candidate != null ? candidate.manager.getRepository(repositoryType) : null;
-    }
-
-    /**
-     * Retrieves the repository instance from the default provider assigned to the given type if there is one,
-     * if one was not nominated while voting was open then the provided volunteeringManager is nominated as the
-     * single de-facto candidate and will be used as the providing manager for all future calls.
-     * <p>
-     * In a multi-database environment, different {@link SqlDatabaseManager} instances may
-     * register themselves as the "provider" for specific repository interfaces. This method
-     * bridges the gap between the global registry and the specific manager owning the data.
-     * </p>
-     * <p>
-     * <b>Note:</b> Check {@link #isReady()} before calling.
-     * </p>
-     *
-     * @param <I>            The specific interface type extending {@link Repository}.
-     * @param repositoryType The class literal of the repository interface to retrieve.
-     * @return The instantiated and ready to use repository instance from the default manager,
-     * or {@code null} if no default provider has been assigned to this type.
-     * @throws IllegalStateException If {@link #isReady()} would return false (voting phase not yet complete).
-     * @apiNote Check {@link #isReady()} before calling.
-     */
-    public synchronized @Nullable <I extends Repository> I getDefaultRepository(@NotNull Class<I> repositoryType, @NotNull SqlDatabaseManager volunteeringManager) {
-        if (!votingClosed) throw new IllegalStateException("Voting has not yet been closed!");
-        var candidate = defaultProvidersBallotBox.getWinner(repositoryType);
-        if (candidate != null) return candidate.manager.getRepository(repositoryType);
-        defaultProvidersBallotBox.nominate(new RepositoryProviderCandidate(
-                volunteeringManager, Repository.collectAllImplementedRepoApis(repositoryType)
-        ));
-        return volunteeringManager.getRepository(repositoryType);
-    }
-
-    /**
-     * Scans a plugin's JAR file for repository registration resources and migrations.
-     * <p>
-     * This method performs the following actions:
-     * <ol>
-     * <li>Ensures the registry is still in the "Voting Phase".</li>
-     * <li>Triggers {@link MigrationLoader#loadMigrations(PlatformHandle, ClassLoader)} for the provided plugin.</li>
-     * <li>Iterates through the plugin's JAR entries searching for files within
-     * {@code DB_REGISTRY_RESOURCE_PATH} (e.g., {@code db/registry/}).</li>
-     * <li>Treats the filename as the FQCN (Fully Qualified Class Name) of the Repository concrete implementation class.</li>
-     * <li>Resolves these classes using the plugin's own ClassLoader.</li>
-     * <li>Calls {@link #nominateRepositoryImplementation} to enter the candidate into the ballot box with a default priority of 1.</li>
-     * </ol>
+     * Resource files are expected at {@code db/registry/}, where:
+     * <ul>
+     * <li><b>filename</b> is the fully-qualified name of the {@link RepositoryApi}-annotated interface</li>
+     * <li><b>file content</b> is the fully-qualified name of the concrete implementation class</li>
+     * </ul>
      * </p>
      *
      * @param platformHandle The plugin whose JAR file should be scanned.
-     * @param scope The class loader used to locate jar resources.
-     * @throws MigrationParseException If an error occurred while loading db migration resources.
+     * @param scope          The class loader used to locate jar resources.
+     * @throws MigrationParseException           If an error occurred while loading db migration resources.
      * @throws RepositoryInitializationException If an I/O error occurs or classes cannot be resolved.
-     * @throws IllegalStateException If called after {@link #closeRegistration()} has been invoked.
+     * @throws IllegalStateException             If called after {@link #closeRegistration()} has been invoked.
      */
     @VisibleForTesting
-    void scanPlugin(@NotNull PlatformHandle platformHandle, @NotNull ClassLoader scope) throws RepositoryInitializationException, MigrationParseException {
-        if (votingClosed) throw new IllegalStateException("Registry proposals are closed!");
+    void scanPlugin(@NotNull PlatformHandle platformHandle, @NotNull ClassLoader scope)
+            throws RepositoryInitializationException, MigrationParseException {
+        if (registrationClosed) throw new IllegalStateException("Registration is closed!");
 
         MigrationLoader.loadMigrations(platformHandle, scope);
         try {
             resourceWalker.visit(scope, DB_REGISTRY_RESOURCE_PATH, entry -> {
-                String implName = entry.path().substring(DB_REGISTRY_RESOURCE_PATH.length());
+                String apiName = entry.path().substring(DB_REGISTRY_RESOURCE_PATH.length());
+                String implName;
+                try (var reader = entry.asReader()) {
+                    implName = reader.lines().map(String::trim).filter(s -> !s.isBlank()).findFirst().orElse(null);
+                }
+                if (implName == null) {
+                    throw new RepositoryInitializationException(
+                            "Registry resource file '" + apiName + "' has no content. "
+                                    + "File content must be the fully-qualified impl class name.");
+                }
+
+                Class<? extends Repository> apiClass = Class.forName(apiName, false, scope)
+                        .asSubclass(Repository.class);
                 Class<? extends Repository> implClass = Class.forName(implName, false, scope)
                         .asSubclass(Repository.class);
-                nominateRepositoryImplementation(platformHandle, implClass, 1);
+
+                // Validate that the impl properly declares this api
+                Repository.findRepositoryApi(implClass); // throws if not valid
+
+                synchronized (this) {
+                    var existing = implBindings.get(apiClass);
+                    if (existing != null && existing != implClass) {
+                        throw new RepositoryInitializationException(
+                                "Conflicting impl bindings for " + apiName
+                                        + ": existing=" + existing.getName() + ", new=" + implName
+                                        + ". Resolve by having only one plugin declare this binding, or call bindImpl() explicitly.");
+                    }
+                    implBindings.put(apiClass, implClass);
+                }
             });
         } catch (Exception ex) {
             throw new RepositoryInitializationException(
@@ -414,450 +527,259 @@ public final class RepositoryRegistry {
         }
     }
 
-    /**
-     * Nominates a default provider for the specified repository type. The winning nomination is the one that
-     * was nominated last before voting was closed.
-     *
-     * @param repositoryApiType Repository API interface type. This must not be a concretion and must have the {@link RepositoryApi}.
-     * @param preferredManager The preferred {@link SqlDatabaseManager} instance to used to access the repositories' data.
-     * @apiNote Caller should check {@link #isAcceptingNominations()} before calling this method outside the
-     * lifecycle start callback.
-     */
-    public synchronized void nominateDefaultProvider(@NotNull Class<? extends Repository> repositoryApiType, @NotNull SqlDatabaseManager preferredManager) {
-        if (votingClosed) throw new IllegalStateException("Registry proposals are closed!");
-        if (!repositoryApiType.isInterface() || !Repository.class.isAssignableFrom(repositoryApiType)) {
-            throw new IllegalArgumentException(repositoryApiType.getName() + " either is not an interface or does not implement Repository.");
-        }
-        if (repositoryApiType.getAnnotation(RepositoryApi.class) == null) {
-            throw new IllegalArgumentException(repositoryApiType.getName() + " is missing the required @RepositoryApi annotation.");
-        }
+    // -----------------------------------------------------------------------
+    // Repository validation helpers
+    // -----------------------------------------------------------------------
 
-        defaultProvidersBallotBox.nominate(new RepositoryProviderCandidate(
-                preferredManager, Repository.collectAllImplementedRepoApis(repositoryApiType)
-        ));
+    private static void validateRepositoryApi(@NotNull Class<? extends Repository> api) {
+        if (!api.isInterface()) {
+            throw new IllegalArgumentException(api.getName() + " must be an interface.");
+        }
+        if (api.getAnnotation(RepositoryApi.class) == null) {
+            throw new IllegalArgumentException(api.getName() + " is missing the required @RepositoryApi annotation.");
+        }
     }
 
-    /**
-     * Nominates a candidate implementation for a specific Repository API and its ancestor API's.
-     *
-     * @param platformHandle      The plugin nominating this implementation.
-     * @param repositoryImplementationType The concrete class implementing a repository API.
-     * @param priority            The priority of this candidate (higher values take precedence).
-     *                            Registry impl mappings found in plugin {@code resources/db/registry/*} are given priority=1.
-     * @throws IllegalStateException If called after {@link #closeRegistration()}.
-     * @apiNote Caller should check {@link #isAcceptingNominations()} before calling this method outside the
-     * lifecycle start callback.
-     */
-    public synchronized void nominateRepositoryImplementation(
-            @NotNull PlatformHandle platformHandle,
-            @NotNull Class<? extends Repository> repositoryImplementationType,
-            int priority
-    ) throws RepositoryInitializationException {
-        if (votingClosed) throw new IllegalStateException("Registry proposals are closed!");
-
-        if (repositoryImplementationType.isInterface() || Modifier.isAbstract(repositoryImplementationType.getModifiers())) {
-            throw new IllegalArgumentException("repositoryImplementationType (" + repositoryImplementationType.getName() + ") must be a non-abstract class");
-        }
-
-        try {
-            repositoryImplementationType.getConstructor(SqlDatabaseManager.class);
-        } catch (NoSuchMethodException ex) {
-            throw new IllegalArgumentException("Class " + repositoryImplementationType.getName()
-                    + " is missing the required ctor(SqlDatabaseManager) constructor. Hint: if this is an internal class it must also be static.", ex);
-        }
-
-        apiImplementorsBallotBox.nominate(new RepositoryImplementorCandidate(
-                platformHandle, priority, Repository.collectAllImplementedRepoApis(repositoryImplementationType), repositoryImplementationType));
-    }
+    // -----------------------------------------------------------------------
+    // Repository Composition
+    // -----------------------------------------------------------------------
 
     /**
-     * Nominates a composite for the registry. Overwrites any previous nomination for the same implementation tree.
-     * @apiNote Caller should check {@link #isAcceptingNominations()} before calling this method outside the
-     * lifecycle start callback.
+     * Registers a {@link RepositoryComposition} implementation with an auto-discovered constructor.
+     * The class must have either a {@code (RepositoryRegistry)} or no-arg constructor.
+     * <p>Must be called before {@link #closeRegistration()}.</p>
      */
-    public synchronized <T extends RepositoryComposition> void nominateRepositoryComposition(
-            @NotNull PlatformHandle platformHandle,
+    public synchronized <T extends RepositoryComposition> void registerComposition(
             @NotNull Class<T> compositionType
     ) {
-        if (votingClosed) throw new IllegalStateException("Registry proposals are closed!");
-        nominateRepositoryComposition(platformHandle, compositionType, getCompositionCreator(compositionType));
+        if (registrationClosed) throw new IllegalStateException("Registration is closed!");
+        registerCompositionInternal(compositionType, discoverCompositionCreator(compositionType));
     }
 
     /**
-     * Nominates a composite with a custom creator. Subject to the voting window.
-     * @apiNote Caller should check {@link #isAcceptingNominations()} before calling this method outside the
-     * lifecycle start callback.
+     * Registers a {@link RepositoryComposition} implementation with a custom creator function.
+     * <p>Must be called before {@link #closeRegistration()}.</p>
      */
-    @SuppressWarnings("unchecked")
-    public synchronized <T extends RepositoryComposition> void nominateRepositoryComposition(
-            @NotNull PlatformHandle platformHandle,
+    public synchronized <T extends RepositoryComposition> void registerComposition(
             @NotNull Class<T> compositionType,
             @NotNull ThrowingFunction<@NotNull RepositoryRegistry, @NotNull T> creator
     ) {
-        if (votingClosed) throw new IllegalStateException("Registry proposals are closed!");
-        if (compositionType.isInterface() || Modifier.isAbstract(compositionType.getModifiers())) {
-            throw new IllegalArgumentException("implementationClass must be a non-interface non-abstract class.");
-        }
+        if (registrationClosed) throw new IllegalStateException("Registration is closed!");
+        registerCompositionInternal(compositionType, creator);
+    }
 
-        compositionsBallotBox.nominate(new RepositoryCompositionCandidate(
-                platformHandle,
-                compositionType,
-                creator));
+    @SuppressWarnings("unchecked")
+    private <T extends RepositoryComposition> void registerCompositionInternal(
+            Class<T> compositionType,
+            ThrowingFunction<RepositoryRegistry, ? extends T> creator
+    ) {
+        if (compositionType.isInterface() || Modifier.isAbstract(compositionType.getModifiers())) {
+            throw new IllegalArgumentException("compositionType must be a non-interface, non-abstract class.");
+        }
+        // Register for the full concrete hierarchy (most-specific wins via last-write)
+        Class<?> current = compositionType;
+        while (current != null && RepositoryComposition.class.isAssignableFrom(current)) {
+            if (!current.isInterface() && !Modifier.isAbstract(current.getModifiers())) {
+                compositionCreators.put((Class<? extends RepositoryComposition>) current, creator);
+            }
+            current = current.getSuperclass();
+        }
     }
 
     /**
-     * Retrieves the flyweight instance of a composite.
+     * Retrieves the flyweight instance of a composition.
+     *
+     * @throws IllegalStateException              If called before registration is closed.
+     * @throws RepositoryInitializationException  If instantiation or initialization fails.
      */
     @SuppressWarnings("unchecked")
-    public synchronized <T extends RepositoryComposition> @NotNull T getCompositeRepository(@NotNull Class<T> compositionType) throws RepositoryInitializationException {
-        if (!votingClosed) throw new IllegalStateException("Cannot access composite flyweights before voting is closed.");
-        RepositoryComposition ret = compositeInstances.get(compositionType);
-        if (ret != null) return (T) ret;
+    public synchronized <T extends RepositoryComposition> @NotNull T getCompositeRepository(
+            @NotNull Class<T> compositionType
+    ) throws RepositoryInitializationException {
+        if (!registrationClosed) throw new IllegalStateException("Cannot access composite flyweights before registration is closed.");
+        RepositoryComposition cached = compositeInstances.get(compositionType);
+        if (cached != null) return (T) cached;
 
-        var candidate = compositionsBallotBox.getWinner(compositionType);
-        if (candidate == null) {
-            candidate = new RepositoryCompositionCandidate(
-                    null,
-                    compositionType,
-                    getCompositionCreator(compositionType));
-            compositionsBallotBox.nominate(candidate);
+        var creator = compositionCreators.get(compositionType);
+        if (creator == null) {
+            // Auto-register on first access
+            @SuppressWarnings("unchecked")
+            var typedCreator = (ThrowingFunction<RepositoryRegistry, T>) discoverCompositionCreator(compositionType);
+            registerCompositionInternal(compositionType, typedCreator);
+            creator = typedCreator;
+        }
+
+        T instance;
+        try {
+            instance = (T) Objects.requireNonNull(creator.apply(this));
+        } catch (Throwable ex) {
+            throw new RepositoryInitializationException("Error while creating instance of " + compositionType.getName(), ex);
+        }
+
+        // Pre-populate flyweight map for the full concrete hierarchy before onInitialize,
+        // so circular references resolve correctly.
+        Class<?> current = compositionType;
+        while (current != null && RepositoryComposition.class.isAssignableFrom(current)) {
+            if (!current.isInterface() && !Modifier.isAbstract(current.getModifiers())) {
+                compositeInstances.put((Class<? extends RepositoryComposition>) current, instance);
+            }
+            current = current.getSuperclass();
         }
 
         try {
-            ret = Objects.requireNonNull(candidate.creator.apply(this));
-            for (var api : candidate.apiTypes) {
-                if (compositeInstances.put(api, ret) != null) {
-                    throw new IllegalStateException();
-                }
-            }
-            ret.onInitialize(this);
-            return (T) ret;
+            instance.onInitialize(this);
         } catch (Throwable ex) {
-            if (ret != null) {
-                for (var api : candidate.apiTypes) {
-                    compositeInstances.remove(api, ret);
-                }
+            // Roll back flyweight registrations on failure
+            current = compositionType;
+            while (current != null && RepositoryComposition.class.isAssignableFrom(current)) {
+                compositeInstances.remove(current, instance);
+                current = current.getSuperclass();
             }
-            throw new RepositoryInitializationException("Error while creating instance of " + compositionType.getName(), ex);
+            throw new RepositoryInitializationException("Error while initializing " + compositionType.getName(), ex);
         }
+
+        return instance;
     }
 
-    private <T extends RepositoryComposition> @NotNull ThrowingFunction<@NotNull RepositoryRegistry, @NotNull T> getCompositionCreator(@NotNull Class<T> compositionType) {
+    @SuppressWarnings("unchecked")
+    private <T extends RepositoryComposition> @NotNull ThrowingFunction<RepositoryRegistry, T> discoverCompositionCreator(
+            @NotNull Class<T> compositionType
+    ) {
+        Constructor<T> ctor1 = null;
         Constructor<T> ctor0 = null;
-        Constructor<T> ctor1;
         try {
             ctor1 = compositionType.getConstructor(RepositoryRegistry.class);
             ctor1.setAccessible(true);
-        } catch (Exception ignored) {
-            ctor1 = null;
-        }
+        } catch (Exception ignored) {}
+
         if (ctor1 == null) {
             try {
                 ctor0 = compositionType.getDeclaredConstructor();
                 ctor0.setAccessible(true);
-            } catch (Exception ignored) {
-                ctor0 = null;
-            }
+            } catch (Exception ignored) {}
         }
 
-        if (ctor1 == null && ctor0 == null)
-            throw new IllegalArgumentException("Composite " + compositionType.getName() + " must have a constructor taking only RepositoryRegistry or a no-args constructor if no creator is provided.");
+        if (ctor1 == null && ctor0 == null) {
+            throw new IllegalArgumentException("Composite " + compositionType.getName()
+                    + " must have a constructor taking only RepositoryRegistry or a no-arg constructor"
+                    + " if no creator is provided.");
+        }
 
-
-        final Constructor<T> finalCtor0 = ctor0;
         final Constructor<T> finalCtor1 = ctor1;
-        return (reg) -> {
-            if (finalCtor1 != null)
-                return finalCtor1.newInstance(reg);
-            else
-                return finalCtor0.newInstance();
-        };
+        final Constructor<T> finalCtor0 = ctor0;
+        return reg -> finalCtor1 != null ? finalCtor1.newInstance(reg) : finalCtor0.newInstance();
     }
 
-    /**
-     * Retrieves the winning candidate for a given repository interface.
-     * @param repositoryType The interface to lookup.
-     * @return The elected {@link RepositoryImplementorCandidate}.
-     * @throws IllegalStateException If voting has not been closed yet.
-     * @throws RepositoryNotRegisteredException If no implementation was registered for this type.
-     * @apiNote Check {@link #isReady()} before calling.
-     */
-    @NotNull
-    public synchronized RepositoryImplementorCandidate getElectedRepositoryImplementorCandidate(
-            Class<? extends Repository> repositoryType
-    ) throws IllegalStateException, RepositoryInitializationException {
-        if (!votingClosed) throw new IllegalStateException("Voting has not yet been closed!");
-        var ret = apiImplementorsBallotBox.getWinner(repositoryType);
-        if (ret != null) return ret;
-        throw new RepositoryNotRegisteredException(repositoryType);
-    }
+    // -----------------------------------------------------------------------
+    // RegistrationHelper
+    // -----------------------------------------------------------------------
 
-    // <editor-folding desc="BalletBox and Candidate Types" defaultstate="collapsed">
-    static class BallotBox<C extends Candidate<I, ?>, I> {
-        /// Repo API Interface -> List of candidates wanting to provide it
-        private final Map<Class<? extends I>, TreeSet<C>> nominations = new HashMap<>();
+    public static final class RegistrationHelper implements Comparable<RegistrationHelper> {
+        private static final AtomicInteger ORDINAL_PROVIDER = new AtomicInteger();
+        private final int ordinal;
+        private final @NotNull PlatformHandle platformHandle;
+        private @Nullable ThrowingConsumer<RegistrationBootstrappingContext> onConfigure;
+        private @Nullable ThrowingConsumer<RepositoryRegistry> onReady;
+        private @Nullable Executor readyExecutor;
+        boolean mutable = true;
 
-        public void nominate(C candidate) {
-            // The most specific API the new candidate claims to provide (the "Source").
-            final var g = candidate.apiTypes().getFirst();
-            for (var rt : candidate.apiTypes()) {
-                var competitors = nominations.get(rt);
-                if (competitors != null && !competitors.isEmpty()) {
-                    // The most specific API of the current top candidate for this target.
-                    var c = competitors.getFirst().apiTypes().getFirst();
-
-                    // Unresolvable Ambiguity: The two source branches are unrelated.
-                    // e.g., B extends A, C extends A. If both B and C are nominated, API A is ambiguous.
-                    if (c != g && !c.isAssignableFrom(g) && !g.isAssignableFrom(c)) {
-                        // TODO: add plugin names
-                        throw new AmbiguousRepositoryApiException(String.format(
-                                "Unresolvable ambiguity for %s! Two unrelated branches of the @RepositoryApi tree were nominated: %s and %s. " +
-                                        "Inheritance must be linear; divergent branches serving the same base API are forbidden. " +
-                                "Consider using a RepositoryComposition instead or moving the @RepositoryApi annotation.",
-                                rt.getName(), c.getName(), g.getName()
-                        ));
-                    }
-                }
-            }
-            for (var rt : candidate.apiTypes()) {
-                nominations.computeIfAbsent(rt, k -> new TreeSet<>())
-                        .add(candidate);
-            }
-        }
-
-        // public Map<Class<? extends Repository>, T> runElection() {
-        //     Map<Class<? extends Repository>, T> electionResult = new HashMap<>(nominations.size());
-        //     return nominations.entrySet().stream()
-        //             .map(e -> Map.entry(e.getKey(), e.getValue().getFirst()))
-        //             .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
-        // }
-
-        public @Nullable C getWinner(Class<? extends I> repositoryType) {
-            var candidates = nominations.get(repositoryType);
-            if (candidates != null && !candidates.isEmpty()) {
-                return candidates.getFirst();
-            } else {
-                return null;
-            }
-        }
-
-        public boolean containsKey(@NotNull Class<? extends I> repositoryType) {
-            return nominations.containsKey(repositoryType) && !nominations.get(repositoryType).isEmpty();
-        }
-    }
-
-    private sealed static abstract class Candidate<I, J extends Candidate<I, ?>>
-            implements Comparable<J>
-            permits RepositoryCompositionCandidate, RepositoryImplementorCandidate, RepositoryProviderCandidate
-    {
-        final @Nullable PlatformHandle platformHandle;
-        final int priority;
-        final @NotNull List<Class<? extends I>> apiTypes;
-
-        public Candidate(
-                @Nullable PlatformHandle platformHandle,
-                int priority,
-                @NotNull List<Class<? extends I>> apiTypes
-        ) {
+        private RegistrationHelper(@NotNull PlatformHandle platformHandle) {
+            this.ordinal = ORDINAL_PROVIDER.incrementAndGet();
             this.platformHandle = platformHandle;
-            this.priority = priority;
-            this.apiTypes = apiTypes;
         }
 
-        public PlatformHandle platformHandle() {
-            return platformHandle;
+        /** Sets the callback invoked during the configure phase (provider publication). */
+        public RegistrationHelper onConfigure(ThrowingConsumer<RegistrationBootstrappingContext> op) {
+            if (!mutable) throw new IllegalStateException("RegistrationHelper is no longer mutable.");
+            this.onConfigure = op;
+            return this;
         }
 
-        public int priority() {
-            return priority;
-        }
-
-        public @NotNull List<Class<? extends I>> apiTypes() {
-            return apiTypes;
-        }
-
-        @Override
-        public int compareTo(@NotNull J other) {
-            // Most specific repo api type wins (If A is-a B, A wins)
-            final var lrt = this.apiTypes().getFirst();
-            final var rrt = other.apiTypes().getFirst();
-            if (lrt != rrt) return lrt.isAssignableFrom(rrt) ? 1 : -1;
-
-            // Check Explicit Priority (Higher wins)
-            int priorityComp = Integer.compare(other.priority(), this.priority());
-            if (priorityComp != 0) return priorityComp;
-
-            if (this.platformHandle != null && other.platformHandle != null) {
-                // Check Dependency (If plugin B depends on A, B wins)
-                int depComp = PlatformHandle.dependencyComparator(this.platformHandle, other.platformHandle);
-                // Fallback to votingPlugin name for deterministic ties
-                return depComp != 0 ? depComp : this.platformHandle.name().compareTo(other.platformHandle.name());
-            }
-            // If one or the other cast a vote then it wins
-            if (this.platformHandle != null) return -1;
-            if (other.platformHandle != null) return 1;
-            // They're equal based on the information we have, override needs to decide
-            return 0;
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (!(o instanceof Candidate<?, ?> other)) return false;
-            return priority == other.priority
-                    && Objects.equals(platformHandle, other.platformHandle)
-                    && Objects.equals(apiTypes, other.apiTypes);
-        }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(platformHandle, priority, apiTypes);
-        }
-    }
-
-    public final static class RepositoryImplementorCandidate extends Candidate<Repository, RepositoryImplementorCandidate> {
-        final @NotNull Class<? extends Repository> implementationType;
-
-        public @NotNull Class<? extends Repository> implementationType() {
-            return implementationType;
-        }
-
-        public RepositoryImplementorCandidate(
-                @NotNull PlatformHandle platformHandle,
-                int priority,
-                @NotNull List<Class<? extends Repository>> apiTypes,
-                @NotNull Class<? extends Repository> implementationType
-        ) {
-            super(platformHandle, priority, apiTypes);
-            this.implementationType = implementationType;
+        /** Sets the callback invoked during the ready phase (repository and composition access). */
+        public RegistrationHelper onReady(ThrowingConsumer<RepositoryRegistry> op) {
+            if (!mutable) throw new IllegalStateException("RegistrationHelper is no longer mutable.");
+            this.onReady = op;
+            return this;
         }
 
         /**
-         * @param manager {@link SqlDatabaseManager} to forward to the created repository.
+         * Sets the {@link Executor} used to run the {@link #onReady} callback.
+         * Useful when the ready callback performs heavy initialization that should run
+         * off the main registration thread (e.g., a virtual-thread executor).
          */
-        public Repository createInstance(
-                @NotNull SqlDatabaseManager manager
-        ) throws NoSuchMethodException, InvocationTargetException, InstantiationException, IllegalAccessException {
-            Constructor<? extends Repository> constructor = implementationType.getConstructor(SqlDatabaseManager.class);
-            // TODO: create the instance in manager.getPlugin()'s class-loader, if it's possible, so it takes
-            //  ownership of the memory footprint and lifecycle.
-            // manager.getPlugin().getClass().getClassLoader()
-            return apiTypes.getFirst().cast(constructor.newInstance(manager));
+        public RegistrationHelper setReadyExecutor(@NotNull Executor executor) {
+            if (!mutable) throw new IllegalStateException("RegistrationHelper is no longer mutable.");
+            this.readyExecutor = executor;
+            return this;
         }
 
         @Override
-        public int compareTo(@NotNull RepositoryImplementorCandidate other) {
-            if (this == other || this.equals(other)) return 0;
-            int k = super.compareTo(other);
-            if (k != 0) return k;
-            return this.implementationType.getName().compareTo(other.implementationType.getName());
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (!(o instanceof RepositoryImplementorCandidate that)) return false;
-            if (!super.equals(o)) return false;
-            return Objects.equals(implementationType, that.implementationType);
-        }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(super.hashCode(), implementationType);
+        public int compareTo(@NotNull RegistrationHelper that) {
+            if (this == that) return 0;
+            int depComp = PlatformHandle.dependencyComparator(this.platformHandle, that.platformHandle);
+            return depComp != 0 ? depComp : Integer.compare(this.ordinal, that.ordinal);
         }
     }
 
-    public final static class RepositoryProviderCandidate extends Candidate<Repository, RepositoryProviderCandidate> {
-        static int nextPriority = 0;
-        final @NotNull SqlDatabaseManager manager;
+    // -----------------------------------------------------------------------
+    // RegistrationBootstrappingContext
+    // -----------------------------------------------------------------------
 
-        public @NotNull SqlDatabaseManager manager() {
-            return manager;
+    public static final class RegistrationBootstrappingContext {
+        private final @NotNull RepositoryRegistry registry;
+        private final @NotNull PlatformHandle platformHandle;
+
+        private RegistrationBootstrappingContext(@NotNull RepositoryRegistry registry, @NotNull PlatformHandle platformHandle) {
+            this.registry = registry;
+            this.platformHandle = platformHandle;
         }
 
-        public RepositoryProviderCandidate(
-                @NotNull SqlDatabaseManager manager,
-                @NotNull List<Class<? extends Repository>> apiTypes
+        public @NotNull RepositoryRegistry registry() { return registry; }
+        public @NotNull PlatformHandle platformHandle() { return platformHandle; }
+
+        /**
+         * Registers {@code manager} as the exclusive provider for {@code api}.
+         * @see RepositoryRegistry#publish(Class, SqlDatabaseManager)
+         */
+        public <T extends Repository> void publish(@NotNull Class<T> api, @NotNull SqlDatabaseManager manager)
+                throws RepositoryInitializationException {
+            registry.publish(api, manager);
+        }
+
+        /**
+         * Registers {@code manager} as a provider for {@code api} with the specified mode.
+         * @see RepositoryRegistry#publish(Class, SqlDatabaseManager, PublishMode)
+         */
+        public <T extends Repository> void publish(@NotNull Class<T> api, @NotNull SqlDatabaseManager manager,
+                @NotNull PublishMode mode) throws RepositoryInitializationException {
+            registry.publish(api, manager, mode);
+        }
+
+        /**
+         * Programmatically overrides the impl binding for {@code api}.
+         * @see RepositoryRegistry#bindImpl(Class, Class)
+         */
+        public <T extends Repository> void bindImpl(@NotNull Class<T> api, @NotNull Class<? extends T> implClass) {
+            registry.bindImpl(api, implClass);
+        }
+
+        /**
+         * Registers a {@link RepositoryComposition} with an auto-discovered constructor.
+         * @see RepositoryRegistry#registerComposition(Class)
+         */
+        public <T extends RepositoryComposition> void registerComposition(@NotNull Class<T> compositionType) {
+            registry.registerComposition(compositionType);
+        }
+
+        /**
+         * Registers a {@link RepositoryComposition} with a custom creator function.
+         * @see RepositoryRegistry#registerComposition(Class, ThrowingFunction)
+         */
+        public <T extends RepositoryComposition> void registerComposition(
+                @NotNull Class<T> compositionType,
+                @NotNull ThrowingFunction<@NotNull RepositoryRegistry, @NotNull T> creator
         ) {
-            super(manager.getPlatformHandle(), nextPriority++, apiTypes);
-            this.manager = manager;
-        }
-
-        @Override
-        public int compareTo(@NotNull RepositoryProviderCandidate other) {
-            if (this == other || this.equals(other)) return 0;
-            int k = super.compareTo(other);
-            if (k != 0) return k;
-            return this.manager.getSqlConnectionConfig().connectionId().compareTo(other.manager.getSqlConnectionConfig().connectionId());
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (!(o instanceof RepositoryProviderCandidate that)) return false;
-            if (!super.equals(o)) return false;
-            return Objects.equals(manager, that.manager);
-        }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(super.hashCode(), manager);
+            registry.registerComposition(compositionType, creator);
         }
     }
-
-    public final static class RepositoryCompositionCandidate extends Candidate<RepositoryComposition, RepositoryCompositionCandidate> {
-        static int nextPriority = 0;
-        final @NotNull Class<? extends RepositoryComposition> compositionType;
-        final @NotNull ThrowingFunction<@NotNull RepositoryRegistry, ? extends RepositoryComposition> creator;
-
-        public @NotNull Class<? extends RepositoryComposition> compositionType() {
-            return compositionType;
-        }
-
-        public @NotNull ThrowingFunction<@NotNull RepositoryRegistry, ? extends RepositoryComposition> creator() {
-            return creator;
-        }
-
-        public RepositoryCompositionCandidate(
-                @Nullable PlatformHandle platformHandle,
-                @NotNull Class<? extends RepositoryComposition> compositionType,
-                @NotNull ThrowingFunction<@NotNull RepositoryRegistry, ? extends RepositoryComposition> creator
-        ) {
-            super(platformHandle, nextPriority++, apiTypesOf(compositionType));
-            this.compositionType = compositionType;
-            this.creator = creator;
-        }
-
-        @SuppressWarnings("unchecked")
-        private static List<Class<? extends RepositoryComposition>> apiTypesOf(Class<? extends RepositoryComposition> compositionType) {
-            // Scan up inheritance tree: gather every concrete parent class of this implementation
-            List<Class<? extends RepositoryComposition>> apiTypes = new ArrayList<>();
-            Class<?> current = compositionType;
-            while (current != null && RepositoryComposition.class.isAssignableFrom(current)) {
-                if (!current.isInterface() && !Modifier.isAbstract(current.getModifiers())) {
-                    apiTypes.add((Class<? extends RepositoryComposition>) current);
-                }
-                current = current.getSuperclass();
-            }
-            return Collections.unmodifiableList(apiTypes);
-        }
-
-        @Override
-        public int compareTo(@NotNull RepositoryCompositionCandidate other) {
-            if (this == other || this.equals(other)) return 0;
-            int k = super.compareTo(other);
-            if (k != 0) return k;
-            return this.compositionType.getName().compareTo(other.compositionType.getName());
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (!(o instanceof RepositoryCompositionCandidate candidate)) return false;
-            if (!super.equals(o)) return false;
-            return Objects.equals(compositionType, candidate.compositionType);
-        }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(super.hashCode(), compositionType);
-        }
-    }
-    // </editor-folding>
 }

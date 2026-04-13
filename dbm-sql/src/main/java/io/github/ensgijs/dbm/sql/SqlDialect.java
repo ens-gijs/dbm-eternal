@@ -16,6 +16,8 @@ package io.github.ensgijs.dbm.sql;
  *     configures the HikariCP pool for the new driver.</li>
  * <li><b>{@link io.github.ensgijs.dbm.sql.UpsertStatement}</b> — add a new case in
  *     {@code sql(SqlDialect)} for the dialect's upsert syntax (if supported).</li>
+ * <li><b>{@code io.github.ensgijs.dbm.migration.SchemaMigrator#ensureHistoryTable()}</b> -
+ * add new case.</li>
  * <li><b>{@code Migration.MigrationSourceType}</b> — add
  *     a corresponding source-type enum value (e.g., {@code POSTGRES}).</li>
  * <li><b>{@code Migration.MigrationSource#sourceType()}</b> — add

@@ -7,8 +7,8 @@ import org.jetbrains.annotations.NotNull;
  * <p>
  * {@link RepositoryRegistry} offers facilities to flyweight composition instances making shared instances globally
  * available (effectively singleton). Implementors must define a constructor taking only a {@link RepositoryRegistry},
- * a default no-args constructor or pre-register a creator with
- * {@link RepositoryRegistry#nominateRepositoryComposition} to be able to make use
+ * a default no-args constructor, or pre-register a creator with
+ * {@code RepositoryRegistry#registerComposition} to be able to make use
  * of {@link RepositoryRegistry#getCompositeRepository(Class)}.
  * </p>
  * <p>

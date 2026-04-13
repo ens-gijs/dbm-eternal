@@ -1,9 +1,8 @@
 package io.github.ensgijs.dbm.repository;
 
-import io.github.ensgijs.dbm.sql.SqlDatabaseManager;
+import io.github.ensgijs.dbm.sql.SqlClient;
 import io.github.ensgijs.dbm.util.objects.ConsumableSubscribableEvent;
 import io.github.ensgijs.dbm.util.objects.SubscribableEvent;
-import io.github.ensgijs.dbm.sql.SqlConnectionConfig;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.logging.Logger;
@@ -15,22 +14,18 @@ import java.util.logging.Logger;
  * <li>Define and implement an <b>interface</b> which describes the repository API.
  * <li>The repository API interface <b>MUST</b> extend {@link Repository}.
  * <li>The repository API interface <b>MUST</b> be annotated with {@link RepositoryApi}.
+ * <li>Provide a constructor accepting a single {@link SqlClient} argument.
  * </ol>
  * @see Repository
  */
 public abstract class AbstractRepository implements Repository {
     protected final @NotNull Logger logger;
-    protected final @NotNull SqlDatabaseManager databaseManager;
+    protected final @NotNull SqlClient sqlClient;
     protected final @NotNull ConsumableSubscribableEvent<Repository> onCacheInvalidatedEvent = new ConsumableSubscribableEvent<>();
 
-    public AbstractRepository(@NotNull SqlDatabaseManager databaseManager) {
+    public AbstractRepository(@NotNull SqlClient sqlClient) {
         this.logger = Logger.getLogger(this.getClass().getSimpleName());
-        this.databaseManager = databaseManager;
-    }
-
-    @Override
-    public final @NotNull SqlDatabaseManager getDatabaseManager() {
-        return databaseManager;
+        this.sqlClient = sqlClient;
     }
 
     /**
@@ -39,9 +34,6 @@ public abstract class AbstractRepository implements Repository {
      *
      * @implNote if you override this method remember to call {@code super.invalidateCaches()} or
      * run {@code onCacheInvalidatedEvent.accept(this);} in your overload.
-     * <p>When called by an owning {@link SqlDatabaseManager} in response to a {@link SqlConnectionConfig}
-     * change, the existing connection pool has already been drained and restarted and any required db migrations have
-     * been applied prior to this method being called.</p>
      */
     @Override
     public void invalidateCaches() {

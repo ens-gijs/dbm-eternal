@@ -12,7 +12,8 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.annotations.VisibleForTesting;
 
-import java.util.*;
+import java.util.Iterator;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 import java.util.logging.Level;
@@ -21,74 +22,55 @@ import java.util.logging.Logger;
 /**
  * Builds upon {@link SqlClient}, adding schema migration and {@link Repository} flyweight support
  * to further abstract database interactions.
+ *
+ * <h2>Obtaining repository instances</h2>
+ * <ul>
+ * <li>{@link #getRepository(Class, Class)} – explicit impl class; no registry required.</li>
+ * <li>{@link #getRepository(Class, RepositoryRegistry)} – impl class resolved from the
+ *     registry's {@code db/registry/} bindings.</li>
+ * </ul>
+ * Each api type is cached after the first call.  Passing a different impl for the same api on a
+ * subsequent call is a hard error.
  */
 public class SqlDatabaseManager extends SqlClient {
     private final static Logger logger = Logger.getLogger("SqlDatabaseManager");
     protected final @NotNull SchemaMigrator migrator;
-    protected final @NotNull RepositoryRegistry registry;
 
-    /// Cache of initialized repository instances.
-    /// Map of Interface -> Object instance.
+    /// Cache of initialized repository instances.  Key: Repository API interface → value: instance.
     private final Map<Class<? extends Repository>, ValueOrException<Repository, DatabaseException>>
-            repositoryInstances = new ConcurrentHashMap<>();
+            repositoryCache = new ConcurrentHashMap<>();
 
     /**
-     * Initializes the manager and attempts to load the database configuration
-     * from the plugin's default config file.
+     * Constructs a new manager.
+     *
      * @param platformHandle The owner of this database manager.
-     * @param dbmConfig {@link DbmConfig}
+     * @param config         Database connection configuration.
      */
-    public SqlDatabaseManager(@NotNull PlatformHandle platformHandle, @NotNull DbmConfig dbmConfig) {
-        super(platformHandle, dbmConfig.sqlConnectionConfig());
-        this.registry = RepositoryRegistry.globalRegistry();
+    public SqlDatabaseManager(@NotNull PlatformHandle platformHandle, @NotNull SqlConnectionConfig config) {
+        super(platformHandle, config);
         this.migrator = new SchemaMigrator(this);
-        registerProvider(dbmConfig.provides());
     }
 
     @VisibleForTesting
-    public SqlDatabaseManager(@NotNull PlatformHandle platformHandle, @NotNull DbmConfig dbmConfig, @Nullable SchemaMigrator migrator, @Nullable RepositoryRegistry registry, @NotNull Function<@NotNull HikariConfig, HikariDataSource> hikariCreator) {
-        super(platformHandle, dbmConfig.sqlConnectionConfig(), hikariCreator);
-        this.registry = registry != null ? registry : RepositoryRegistry.globalRegistry();
+    public SqlDatabaseManager(
+            @NotNull PlatformHandle platformHandle,
+            @NotNull SqlConnectionConfig config,
+            @Nullable SchemaMigrator migrator,
+            @NotNull Function<@NotNull HikariConfig, HikariDataSource> hikariCreator
+    ) {
+        super(platformHandle, config, hikariCreator);
         this.migrator = migrator != null ? migrator : new SchemaMigrator(this);
-    }
-
-    /**
-     * Attempts to register this manager as the default provider for a list of repository
-     * API <b>interfaces</b>.
-     * <p>
-     * This method reads the {@code provides} string list from the resolved database
-     * configuration section. For each FQCN (Fully Qualified Class Name) in that list,
-     * it attempts to:
-     * </p>
-     * <ol>
-     * <li>Load the class using the plugin's ClassLoader.</li>
-     * <li>Ensure the class is a subclass of {@link Repository}.</li>
-     * <li>Nominate this {@link SqlDatabaseManager} instance as the official
-     * provider in the {@link RepositoryRegistry}.</li>
-     * </ol>
-     * <p>
-     * If a class in the {@code provides} list cannot be found, a warning is logged but
-     * bootstrapping continues for other entries.
-     * </p>
-     * <p>
-     * <b>Note:</b> This method is called by this classes constructor, if a descendant overrides this
-     * method it should check {@code registry.isAcceptingNominations()} and act intelligently.
-     * </p>
-     */
-    protected void registerProvider(List<Class<? extends Repository>> provides) {
-        for (var registryType : provides) {
-            registry.nominateDefaultProvider(registryType, this);
-        }
     }
 
     @Override
     public boolean setSqlConnectionConfig(@NotNull SqlConnectionConfig config) {
         final boolean connectionChanged = super.setSqlConnectionConfig(config);
-        if (connectionChanged && migrator != null /*ture during instance creation*/) {
+        if (connectionChanged && migrator != null /*true during instance creation*/) {
             migrator.refreshVersionCache();
 
-            // perform migrations against new connection
-            var iter = repositoryInstances.entrySet().iterator();
+            // Re-run migrations and invalidate caches for any cached repositories
+            Iterator<Map.Entry<Class<? extends Repository>, ValueOrException<Repository, DatabaseException>>>
+                    iter = repositoryCache.entrySet().iterator();
             while (iter.hasNext()) {
                 var e = iter.next();
                 var voe = e.getValue();
@@ -97,12 +79,12 @@ public class SqlDatabaseManager extends SqlClient {
                         migrator.runMigrationsFor(e.getKey());
                         voe.getValue().invalidateCaches();
                     } else {
-                        // release previously captured errors to lazily allow a re-bootstrapping attempt by getRepository()
+                        // Release previously captured errors to lazily allow re-bootstrapping
                         iter.remove();
                     }
                 } catch (Exception ex) {
-                    logger.log(Level.SEVERE, "Error while applying required migrations for repository: " + voe.getValue().getClass().getName(), ex);
-                    // release to lazily allow a re-bootstrapping attempt by getRepository()
+                    logger.log(Level.SEVERE, "Error while applying required migrations for repository: "
+                            + voe.getValue().getClass().getName(), ex);
                     iter.remove();
                 }
             }
@@ -111,37 +93,77 @@ public class SqlDatabaseManager extends SqlClient {
     }
 
     /**
-     * Returns an initialized repository instance of the requested type.
-     * Migrations will be run the first time this method is called for a repository.
-     * Successive calls will return the same repository instance.
-     * @param repoInterface {@link Repository} requested.
+     * Returns an initialized repository instance of the requested type, using the given
+     * impl class to instantiate it on first access.
+     * <p>
+     * Migrations are run the first time this method is called for a given api.
+     * Successive calls return the cached flyweight instance.
+     * </p>
+     * <p>
+     * The impl class must provide a {@code constructor(SqlClient)} matching the
+     * {@link io.github.ensgijs.dbm.repository.AbstractRepository} contract.
+     * </p>
+     *
+     * @param api       The {@link Repository} API interface to retrieve.
+     * @param implClass The concrete implementation class to instantiate.
      * @return Flyweight instance of the requested repository.
      * @param <I> Repository interface type.
-     * @throws RepositoryInitializationException
+     * @throws RepositoryInitializationException If the impl class cannot be instantiated,
+     *         or if a different impl was already cached for this api.
      */
     @SuppressWarnings("unchecked")
-    public <I extends Repository> @NotNull I getRepository(@NotNull Class<I> repoInterface) throws RepositoryInitializationException {
-        var voe = repositoryInstances.get(repoInterface);
-        if (voe != null) return (I) voe.getOrThrow();
-
-        final RepositoryRegistry.RepositoryImplementorCandidate repositoryCandidate = registry.getElectedRepositoryImplementorCandidate(repoInterface);
-        try {
-            // Only migrate the top api, runMigrations will navigate the hierarchy respecting inheritMigrations from here
-            migrator.runMigrationsFor(repositoryCandidate.apiTypes().getFirst());
-            try {
-                voe = ValueOrException.forValue(repositoryCandidate.createInstance(this));
-            } catch (DatabaseException ex) {
-                throw ex;
-            } catch (Exception ex) {
-                throw new RepositoryInitializationException("Failed to instantiate: " + repositoryCandidate.implementationType().getName(), ex);
+    public <I extends Repository> @NotNull I getRepository(
+            @NotNull Class<I> api,
+            @NotNull Class<? extends I> implClass
+    ) throws RepositoryInitializationException {
+        var voe = repositoryCache.get(api);
+        if (voe != null) {
+            I instance = (I) voe.getOrThrow();
+            if (!implClass.isInstance(instance)) {
+                throw new RepositoryInitializationException(
+                        "Cache collision for api " + api.getName()
+                                + ": already bound to " + instance.getClass().getName()
+                                + " but requested " + implClass.getName()
+                                + ". Each api type must map to exactly one impl per manager.");
             }
-        } catch (Exception ex) {
-            voe = ValueOrException.forException(new RepositoryInitializationException("Error while setting up repository for: " + repoInterface.getName(), ex));
+            return instance;
         }
 
-        for (var api : repositoryCandidate.apiTypes()) {
-            repositoryInstances.put(api, voe);
+        try {
+            migrator.runMigrationsFor(api);
+            var ctor = implClass.getConstructor(SqlClient.class);
+            I instance = api.cast(ctor.newInstance(this));
+            voe = ValueOrException.forValue(instance);
+        } catch (RepositoryInitializationException ex) {
+            voe = ValueOrException.forException(ex);
+        } catch (Exception ex) {
+            voe = ValueOrException.forException(
+                    new RepositoryInitializationException("Failed to instantiate: " + implClass.getName(), ex));
         }
+
+        repositoryCache.put(api, voe);
         return (I) voe.getOrThrow();
+    }
+
+    /**
+     * Returns an initialized repository instance of the requested type, resolving the
+     * impl class from {@code registry}'s impl bindings.
+     * <p>
+     * Equivalent to {@code getRepository(api, registry.findImplementation(api))}.
+     * </p>
+     *
+     * @param api      The {@link Repository} API interface to retrieve.
+     * @param registry The registry holding the api-to-impl binding.
+     * @return Flyweight instance of the requested repository.
+     * @param <I> Repository interface type.
+     * @throws RepositoryInitializationException If the impl cannot be resolved or instantiated.
+     */
+    @SuppressWarnings("unchecked")
+    public <I extends Repository> @NotNull I getRepository(
+            @NotNull Class<I> api,
+            @NotNull RepositoryRegistry registry
+    ) throws RepositoryInitializationException {
+        Class<? extends I> implClass = (Class<? extends I>) registry.findImplementation(api);
+        return getRepository(api, implClass);
     }
 }

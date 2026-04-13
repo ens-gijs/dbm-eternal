@@ -10,7 +10,8 @@ import java.lang.annotation.Target;
  * <p>
  * This annotation is <b>required</b> on every {@link Repository} interface that describes
  * a public API contract, even if its migration list is empty. It must only be placed on
- * interfaces (not on abstract classes or concrete implementations).
+ * interfaces that <b>directly extend</b> {@link Repository} — extending other
+ * {@code @RepositoryApi} interfaces is forbidden.
  * </p>
  * <p>Usage example:</p>
  * <pre>{@code
@@ -18,16 +19,10 @@ import java.lang.annotation.Target;
  * public interface UserRepository extends Repository {
  *     List<User> findAll();
  * }
- *
- * // Extending an existing API — inherits "users" migrations by default:
- * @RepositoryApi("premium_users")
- * public interface PremiumUserRepository extends UserRepository {
- *     List<User> findPremium();
- * }
  * }</pre>
  *
  * @see Repository
- * @see io.github.ensgijs.dbm.repository.RepositoryRegistry
+ * @see RepositoryRegistry
  */
 @Retention(RetentionPolicy.RUNTIME)
 @Target(ElementType.TYPE)
@@ -38,13 +33,5 @@ public @interface RepositoryApi {
      * May be empty if this interface introduces no new migrations of its own.
      */
     String[] value() default {};
-
-    /**
-     * If {@code true} (the default), the migration system will also collect migration names from
-     * ancestor {@link Repository} interfaces annotated with {@code @RepositoryApi}, walking up the
-     * hierarchy until an interface with {@code inheritMigrations = false} is encountered.
-     * Interfaces in the hierarchy that lack this annotation are transparently skipped.
-     */
-    boolean inheritMigrations() default true;
 
 }

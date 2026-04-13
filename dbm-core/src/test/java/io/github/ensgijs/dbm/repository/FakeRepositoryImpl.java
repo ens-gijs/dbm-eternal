@@ -1,6 +1,6 @@
 package io.github.ensgijs.dbm.repository;
 
-import io.github.ensgijs.dbm.sql.SqlDatabaseManager;
+import io.github.ensgijs.dbm.sql.SqlClient;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -10,8 +10,8 @@ public class FakeRepositoryImpl extends AbstractRepository implements FakeReposi
     public boolean invalidateCacheCalled = false;
     public boolean poisonInvalidateCache = false;
 
-    public FakeRepositoryImpl(SqlDatabaseManager databaseManager) {
-        super(databaseManager);
+    public FakeRepositoryImpl(SqlClient sqlClient) {
+        super(sqlClient);
     }
 
     @Override
