@@ -66,7 +66,7 @@ public final class SchemaMigrator {
      */
     private void ensureHistoryTable() throws DatabaseException {
         // We use LONG/BIGINT for version to support timestamps
-        String sql = switch(client.activeDialect()) {
+        String sql = switch(Objects.requireNonNull(client.activeDialect(), "Client does not have an active dialect!")) {
             case UNDEFINED -> throw new DatabaseException("Client does not have an active dialect!");
             case SqlDialect.MYSQL -> """
                   CREATE TABLE IF NOT EXISTS SchemaMigrations (

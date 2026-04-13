@@ -37,6 +37,7 @@ class SchemaMigratorTest {
     @BeforeEach
     protected void setUp() throws Exception {
         mockClient = Mockito.mock(SqlClient.class);
+        when(mockClient.activeDialect()).thenReturn(SqlDialect.MYSQL);
         migrator = new SchemaMigrator(mockClient);
         migrator.refreshVersionCache();
     }
