@@ -5,13 +5,13 @@ import io.github.ensgijs.dbm.platform.SimplePlatformHandle;
 import io.github.ensgijs.dbm.sql.SqlClient;
 import io.github.ensgijs.dbm.sql.SqlConnectionConfig;
 import io.github.ensgijs.dbm.sql.SqlDatabaseManager;
+import io.github.ensgijs.dbm.util.function.ThrowingBiFunction;
 import io.github.ensgijs.dbm.util.function.ThrowingConsumer;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.*;
 
 import java.io.BufferedReader;
 import java.io.StringReader;
-import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.*;
@@ -133,7 +133,7 @@ public class RepositoryRegistryTest {
         registry.publish(FakeRepo.class, mockManager, RepositoryRegistry.PublishMode.CONTEST);
         registry.publish(FakeRepo.class, manager2, RepositoryRegistry.PublishMode.CONTEST);
 
-        var future = registry.closeRegistration((BiFunction<Class<? extends Repository>, List<SqlDatabaseManager>, SqlDatabaseManager>) null);
+        var future = registry.closeRegistration(null);
         assertThrows(ExecutionException.class, () -> future.get(1, TimeUnit.SECONDS));
     }
 
@@ -234,7 +234,7 @@ public class RepositoryRegistryTest {
     @DisplayName("bindImpl sets the impl binding; findImplementation returns it")
     void testBindImpl() {
         registry.bindImpl(FakeRepo.class, FakeRepoImpl.class);
-        assertSame(FakeRepoImpl.class, registry.findImplementation(FakeRepo.class));
+        assertSame(FakeRepoImpl.class, registry.getImplementationType(FakeRepo.class));
     }
 
     @Test
@@ -322,7 +322,7 @@ public class RepositoryRegistryTest {
 
             registry.scanPlugin(pluginA, getClass().getClassLoader());
 
-            assertSame(FakeRepoImpl.class, registry.findImplementation(FakeRepo.class));
+            assertSame(FakeRepoImpl.class, registry.getImplementationType(FakeRepo.class));
         }
 
         @Test
@@ -485,7 +485,7 @@ public class RepositoryRegistryTest {
             boolean initialized = false;
             public HeavyLogic() { instantiationCount.incrementAndGet(); }
             @Override
-            public void onInitialize(RepositoryRegistry r) {
+            public void onInitialize(@NotNull RepositoryRegistry r) {
                 initCount.incrementAndGet();
                 initialized = true;
             }
@@ -493,19 +493,19 @@ public class RepositoryRegistryTest {
 
         public static class ServiceA implements RepositoryComposition {
             ServiceB other;
-            @Override public void onInitialize(RepositoryRegistry r) { other = r.getCompositeRepository(ServiceB.class); }
+            @Override public void onInitialize(@NotNull RepositoryRegistry r) { other = r.getCompositeRepository(ServiceB.class); }
         }
 
         public static class ServiceB implements RepositoryComposition {
             ServiceA other;
-            @Override public void onInitialize(RepositoryRegistry r) { other = r.getCompositeRepository(ServiceA.class); }
+            @Override public void onInitialize(@NotNull RepositoryRegistry r) { other = r.getCompositeRepository(ServiceA.class); }
         }
 
         public static class StatsComposite implements RepositoryComposition {
             final java.util.Map<String, String> cache = new java.util.HashMap<>();
             FakeRepo repo;
             @Override
-            public void onInitialize(RepositoryRegistry r) {
+            public void onInitialize(@NotNull RepositoryRegistry r) {
                 repo = r.get(FakeRepo.class);
                 repo.onCacheInvalidatedEvent().subscribe(ignored -> cache.clear());
             }

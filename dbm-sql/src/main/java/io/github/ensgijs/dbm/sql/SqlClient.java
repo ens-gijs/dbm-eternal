@@ -47,7 +47,11 @@ public class SqlClient {
     }
 
     @VisibleForTesting
-    public SqlClient(@NotNull PlatformHandle platformHandle, @NotNull SqlConnectionConfig sqlConnectionConfig, @NotNull Function<@NotNull HikariConfig, HikariDataSource> hikariCreator) {
+    public SqlClient(
+            @NotNull PlatformHandle platformHandle,
+            @NotNull SqlConnectionConfig sqlConnectionConfig,
+            @NotNull Function<@NotNull HikariConfig, HikariDataSource> hikariCreator
+    ) {
         this.platformHandle = platformHandle;
         this.hikariCreator = hikariCreator;
         setSqlConnectionConfig(sqlConnectionConfig);

@@ -9,9 +9,8 @@ import java.util.*;
  * Base interface for all repository types.
  * <ol>
  * <li>Implementors <b>MUST</b> define an interface annotated with {@link RepositoryApi}
- *     that <b>directly extends</b> {@code Repository}. Extending other {@code @RepositoryApi}
- *     interfaces is forbidden.</li>
- * <li>Each concrete implementation must implement exactly one {@code @RepositoryApi} interface.</li>
+ *     that <b>directly extends</b> {@code Repository}.
+ * <li>Extending multiple {@code @RepositoryApi} interfaces is forbidden.</li>
  * <li>Implementors <b>MUST</b> provide a default {@code constructor(SqlClient)}.</li>
  * </ol>
  *
@@ -37,7 +36,7 @@ public interface Repository {
     @NotNull SubscribableEvent<Repository> onCacheInvalidatedEvent();
 
     /**
-     * Finds the single {@code @RepositoryApi} interface implemented by the given class.
+     * Identifies the single {@code @RepositoryApi} interface implemented by the given class.
      * <p>
      * Validates that:
      * <ul>
@@ -46,12 +45,12 @@ public interface Repository {
      * <li>The annotation is only on interfaces that extend {@code Repository}</li>
      * </ul>
      *
-     * @param clazz The concrete repository implementation class.
+     * @param clazz A concrete repository implementation class or a {@code @RepositoryApi} interface.
      * @return The single {@code @RepositoryApi} interface.
      * @throws IllegalArgumentException If validation fails.
      */
     @SuppressWarnings("unchecked")
-    static Class<? extends Repository> findRepositoryApi(@NotNull Class<? extends Repository> clazz) {
+    static Class<? extends Repository> identifyRepositoryApi(@NotNull Class<? extends Repository> clazz) {
         List<Class<? extends Repository>> found = new ArrayList<>();
         collectRepositoryApis(clazz, found);
 
@@ -63,9 +62,17 @@ public interface Repository {
             throw new IllegalArgumentException(clazz.getName()
                     + " implements multiple @RepositoryApi interfaces: "
                     + found.stream().map(Class::getSimpleName).toList()
-                    + ". Each implementation must implement exactly one @RepositoryApi interface.");
+                    + ". Each implementation must implement exactly one @RepositoryApi interface. "
+                    + "You probably want to make a RepositoryComposition instead.");
         }
         return found.getFirst();
+    }
+
+    static void validateRepositoryApi(@NotNull Class<? extends Repository> api) {
+        if (!api.isInterface()) {
+            throw new IllegalArgumentException(api.getName() + " must be an interface.");
+        }
+        identifyRepositoryApi(api);
     }
 
     @SuppressWarnings("unchecked")

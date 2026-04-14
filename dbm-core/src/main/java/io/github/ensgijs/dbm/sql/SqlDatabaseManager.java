@@ -6,6 +6,7 @@ import io.github.ensgijs.dbm.util.objects.ValueOrException;
 import io.github.ensgijs.dbm.migration.SchemaMigrator;
 import io.github.ensgijs.dbm.platform.PlatformHandle;
 import io.github.ensgijs.dbm.repository.Repository;
+import io.github.ensgijs.dbm.repository.RepositoryComposition;
 import io.github.ensgijs.dbm.repository.RepositoryInitializationException;
 import io.github.ensgijs.dbm.repository.RepositoryRegistry;
 import org.jetbrains.annotations.NotNull;
@@ -20,17 +21,22 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * Builds upon {@link SqlClient}, adding schema migration and {@link Repository} flyweight support
+ * Builds upon {@link SqlClient}, adding schema migration and {@link Repository} flyweight support (instance caching)
  * to further abstract database interactions.
  *
  * <h2>Obtaining repository instances</h2>
  * <ul>
- * <li>{@link #getRepository(Class, Class)} – explicit impl class; no registry required.</li>
- * <li>{@link #getRepository(Class, RepositoryRegistry)} – impl class resolved from the
+ * <li>{@link #getRepository(Class, Class)} – explicit impl class specified; no registry lookup required. <br/>
+ * <em>It is an error to request two different impl's for the same RepositoryApi from a single instance of a
+ * {@link SqlDatabaseManager}. If you need a non-flyweight instance you should directly construct the instance
+ * yourself.</em></li>
+ * <li>{@link #getRepository(Class, RepositoryRegistry)} – uses the preferred impl class resolved from the
  *     registry's {@code db/registry/} bindings.</li>
  * </ul>
- * Each api type is cached after the first call.  Passing a different impl for the same api on a
- * subsequent call is a hard error.
+ * Each {@link Repository} instance is lazily constructed and cached upon the first {@code getRepository()} call
+ * then that same instance is returned for every subsequent call.
+ * @see RepositoryComposition
+ * @see RepositoryRegistry
  */
 public class SqlDatabaseManager extends SqlClient {
     private final static Logger logger = Logger.getLogger("SqlDatabaseManager");
@@ -101,12 +107,13 @@ public class SqlDatabaseManager extends SqlClient {
      * </p>
      * <p>
      * The impl class must provide a {@code constructor(SqlClient)} matching the
-     * {@link io.github.ensgijs.dbm.repository.AbstractRepository} contract.
+     * {@link Repository} contract.
      * </p>
      *
      * @param api       The {@link Repository} API interface to retrieve.
-     * @param implClass The concrete implementation class to instantiate.
-     * @return Flyweight instance of the requested repository.
+     * @param implClass The concrete implementation class to instantiate if an instance is not already cached.
+     * @return Flyweight instance of the requested repository. Successive calls to this method will return the same
+     * instance.
      * @param <I> Repository interface type.
      * @throws RepositoryInitializationException If the impl class cannot be instantiated,
      *         or if a different impl was already cached for this api.
@@ -163,7 +170,7 @@ public class SqlDatabaseManager extends SqlClient {
             @NotNull Class<I> api,
             @NotNull RepositoryRegistry registry
     ) throws RepositoryInitializationException {
-        Class<? extends I> implClass = (Class<? extends I>) registry.findImplementation(api);
+        Class<? extends I> implClass = (Class<? extends I>) registry.getImplementationType(api);
         return getRepository(api, implClass);
     }
 }

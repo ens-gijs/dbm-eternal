@@ -28,7 +28,8 @@
  *
  * <dt>{@link io.github.ensgijs.dbm.repository.RepositoryComposition}</dt>
  * <dd>Aggregates multiple {@link io.github.ensgijs.dbm.repository.Repository} instances into
- *     a single service object without owning tables directly.</dd>
+ *     a single service object without owning tables directly. Contains the business logic
+ *     required to coordinate actions across multiple {@link io.github.ensgijs.dbm.repository.Repository}'s.</dd>
  * </dl>
  *
  * <h2>Bootstrap Lifecycle</h2>

@@ -5,10 +5,12 @@ import io.github.ensgijs.dbm.platform.PlatformHandle;
 import io.github.ensgijs.dbm.sql.SqlDatabaseManager;
 import io.github.ensgijs.dbm.migration.MigrationLoader;
 import io.github.ensgijs.dbm.migration.MigrationParseException;
+import io.github.ensgijs.dbm.util.function.ThrowingBiFunction;
 import io.github.ensgijs.dbm.util.function.ThrowingConsumer;
 import io.github.ensgijs.dbm.util.function.ThrowingFunction;
 import io.github.ensgijs.dbm.util.io.ResourceScanner;
 import io.github.ensgijs.dbm.util.objects.OneShotConsumableSubscribableEvent;
+import io.github.ensgijs.dbm.util.objects.SubscribableEvent;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.annotations.VisibleForTesting;
@@ -21,7 +23,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.BiFunction;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
@@ -40,8 +42,8 @@ import java.util.logging.Logger;
  *     register {@link SqlDatabaseManager} providers and
  *     {@link RegistrationBootstrappingContext#registerComposition} to register
  *     {@link RepositoryComposition} aggregators.</li>
- * <li><b>Ready phase</b> – call {@link #closeRegistration()} (or the overload accepting a
- *     {@code conflictResolver}).  Provider conflicts from {@link PublishMode#CONTEST CONTEST}
+ * <li><b>Ready phase</b> – call {@link #closeRegistration(ThrowingBiFunction)} after everyone has had a chance to
+ *     {@link #register(PlatformHandle, ClassLoader)}.  Provider conflicts from {@link PublishMode#CONTEST CONTEST}
  *     publications are resolved, then {@link RegistrationHelper#onReady(ThrowingConsumer)} callbacks
  *     are invoked, after which the registry is fully operational.</li>
  * </ol>
@@ -50,10 +52,11 @@ import java.util.logging.Logger;
  * <ul>
  * <li>{@link #get(Class)} – retrieves the resolved repository instance; throws if not found.</li>
  * <li>{@link #find(Class)} – retrieves as {@link Optional}; empty if not published.</li>
- * <li>{@link #isProvidedBy(Class, SqlDatabaseManager)} – checks which manager owns an api.</li>
+ * <li>{@link #isProvidedBy(Class, SqlDatabaseManager)} – checks if a specific manager owns an api through this
+ *     registry.</li>
  * </ul>
  *
- * <p>You may use the {@link #globalRegistry()} singleton or create isolated instances for testing.</p>
+ * <p>You may use the {@link #globalRegistry()} singleton or create isolated instances for testing or other use.</p>
  *
  * @see Repository
  * @see RepositoryApi
@@ -80,6 +83,7 @@ public final class RepositoryRegistry {
 
     /// Flyweight storage for composition instances: class → singleton
     private final Map<Class<? extends RepositoryComposition>, RepositoryComposition> compositeInstances = new HashMap<>();
+
     /// Registered composition creators: concrete class → creator function
     private final Map<Class<? extends RepositoryComposition>, ThrowingFunction<RepositoryRegistry, ? extends RepositoryComposition>> compositionCreators = new HashMap<>();
 
@@ -89,6 +93,8 @@ public final class RepositoryRegistry {
 
     /**
      * @return The singleton global {@link RepositoryRegistry} instance.
+     * @see #isGlobalRegistryCreated()
+     * @see #onGlobalRegistryCreatedEvent()
      */
     public static RepositoryRegistry globalRegistry() {
         if (globalRegistryInstance == null) {
@@ -105,8 +111,17 @@ public final class RepositoryRegistry {
         return globalRegistryInstance;
     }
 
+    /// Checks if the global registry has been created by someone having called {@link #globalRegistry()}.
     public static boolean isGlobalRegistryCreated() {
         return globalRegistryInstance != null;
+    }
+
+    /**
+     * Allows subscribing to be notified when/if the global registry has been created. If the global
+     * registry has already been created, any new subscribers will be immediately notified.
+     */
+    public static SubscribableEvent<RepositoryRegistry> onGlobalRegistryCreatedEvent() {
+        return onGlobalRegistryCreatedEvent;
     }
 
     // -----------------------------------------------------------------------
@@ -141,12 +156,6 @@ public final class RepositoryRegistry {
         return !registrationClosed;
     }
 
-    /** @deprecated Use {@link #isAcceptingRegistrations()} */
-    @Deprecated(forRemoval = true)
-    public boolean isAcceptingNominations() {
-        return isAcceptingRegistrations();
-    }
-
     /** Returns {@code true} after {@link #closeRegistration()} completes. */
     public boolean isReady() {
         return registrationClosed;
@@ -167,7 +176,7 @@ public final class RepositoryRegistry {
         EXCLUSIVE,
         /**
          * Multiple providers may contest for this api. The winner is determined by the
-         * {@code conflictResolver} passed to {@link #closeRegistration(BiFunction)}.
+         * {@code conflictResolver} passed to {@link #closeRegistration(ThrowingBiFunction)}.
          * If {@code closeRegistration()} is called without a resolver and a contest exists,
          * it completes exceptionally.
          */
@@ -183,7 +192,8 @@ public final class RepositoryRegistry {
      * @throws RepositoryInitializationException If another provider has already been published for this api.
      * @throws IllegalStateException             If registration has already been closed.
      */
-    public <T extends Repository> void publish(
+    @VisibleForTesting
+    <T extends Repository> void publish(
             @NotNull Class<T> api,
             @NotNull SqlDatabaseManager manager
     ) throws RepositoryInitializationException {
@@ -199,13 +209,14 @@ public final class RepositoryRegistry {
      *                                           existing publication was {@code EXCLUSIVE}.
      * @throws IllegalStateException             If registration has already been closed.
      */
-    public synchronized <T extends Repository> void publish(
+    @VisibleForTesting
+    synchronized <T extends Repository> void publish(
             @NotNull Class<T> api,
             @NotNull SqlDatabaseManager manager,
             @NotNull PublishMode mode
     ) throws RepositoryInitializationException {
         if (registrationClosed) throw new IllegalStateException("Registration is closed!");
-        validateRepositoryApi(api);
+        Repository.validateRepositoryApi(api);  // throws if invalid
 
         var list = contestantProviders.computeIfAbsent(api, k -> new ArrayList<>());
         if (!list.isEmpty()) {
@@ -221,7 +232,7 @@ public final class RepositoryRegistry {
 
     /**
      * Programmatically overrides the impl binding for {@code api}, replacing any resource-file
-     * declaration.  Must be called before {@link #closeRegistration()}.
+     * declaration.  Silently replaces any existing binding.  Must be called before {@link #closeRegistration()}.
      *
      * @throws IllegalStateException If registration has already been closed.
      */
@@ -230,7 +241,7 @@ public final class RepositoryRegistry {
             @NotNull Class<? extends T> implClass
     ) {
         if (registrationClosed) throw new IllegalStateException("Registration is closed!");
-        validateRepositoryApi(api);
+        Repository.validateRepositoryApi(api);  // throws if invalid
         implBindings.put(api, implClass);
     }
 
@@ -239,7 +250,8 @@ public final class RepositoryRegistry {
     // -----------------------------------------------------------------------
 
     /**
-     * Returns the resolved repository instance for {@code api}.
+     * Returns the resolved repository instance for {@code api}. The same instance will be returned every
+     * time this method is called with the same parameter.
      *
      * @throws IllegalStateException          If {@link #isReady()} is {@code false}.
      * @throws RepositoryNotRegisteredException If no provider was published for this api.
@@ -260,11 +272,14 @@ public final class RepositoryRegistry {
      *
      * @throws IllegalStateException If {@link #isReady()} is {@code false}.
      */
+    @SuppressWarnings("unchecked")
     public <I extends Repository> @NotNull Optional<I> find(@NotNull Class<I> api) {
         if (!registrationClosed) throw new IllegalStateException("Registration has not yet been closed!");
-        if (!resolvedProviders.containsKey(api)) return Optional.empty();
+        var manager = resolvedProviders.get(api);
+        var implClass = (Class<? extends I>) implBindings.get(api);
+        if (manager == null || implClass == null) return Optional.empty();
         try {
-            return Optional.of(get(api));
+            return Optional.of(manager.getRepository(api, implClass));
         } catch (RepositoryNotRegisteredException ex) {
             return Optional.empty();
         }
@@ -272,22 +287,34 @@ public final class RepositoryRegistry {
 
     /**
      * Returns {@code true} if {@code manager} is the resolved provider for {@code api}.
+     * {@code false} if !{@link #isReady()}.
      */
     public boolean isProvidedBy(@NotNull Class<? extends Repository> api, @NotNull SqlDatabaseManager manager) {
         if (!registrationClosed) return false;
-        return manager.equals(resolvedProviders.get(api));
+        return manager == resolvedProviders.get(api);
     }
 
     /**
-     * Returns the impl class bound to {@code api}, for use by {@link SqlDatabaseManager#getRepository(Class, RepositoryRegistry)}.
+     * Returns the impl class bound to {@code api}. May be called while {@link #isAcceptingRegistrations()}
+     * and {@link #isReady()}.
      *
      * @throws RepositoryNotRegisteredException If no impl binding was declared for this api.
      */
-    public @NotNull Class<? extends Repository> findImplementation(@NotNull Class<? extends Repository> api) {
+    public @NotNull Class<? extends Repository> getImplementationType(@NotNull Class<? extends Repository> api) {
         var impl = implBindings.get(api);
         if (impl == null) throw new RepositoryNotRegisteredException(
                 "No impl binding found for " + api.getName() + ". Declare one in db/registry/ or call bindImpl().");
         return impl;
+    }
+
+    /**
+     * Returns an {@link Optional} containing the impl class bound to {@code api}, or empty if no binding exists.
+     * May be called while {@link #isAcceptingRegistrations()} and {@link #isReady()}.
+     *
+     * @throws RepositoryNotRegisteredException If no impl binding was declared for this api.
+     */
+    public @NotNull Optional<Class<? extends Repository>> findImplementationType(@NotNull Class<? extends Repository> api) {
+        return Optional.ofNullable(implBindings.get(api));
     }
 
     // -----------------------------------------------------------------------
@@ -336,7 +363,7 @@ public final class RepositoryRegistry {
 
     /**
      * Closes registration and runs lifecycle callbacks.  Equivalent to
-     * {@link #closeRegistration(BiFunction) closeRegistration(null)}.
+     * {@link #closeRegistration(ThrowingBiFunction) closeRegistration(null)}.
      * <p>
      * If any {@link PublishMode#CONTEST CONTEST} conflicts exist and no resolver was supplied,
      * the returned future completes exceptionally.
@@ -348,6 +375,10 @@ public final class RepositoryRegistry {
 
     /**
      * Closes registration, resolves contested providers, and runs lifecycle callbacks.
+     * Performs best-effort completeness, if any phase fails for any registrant no further
+     * phases for that registrant will be executed. However, execution of other registrants
+     * will proceed.
+     *
      * <p>
      * Steps:
      * <ol>
@@ -368,7 +399,7 @@ public final class RepositoryRegistry {
      */
     @VisibleForTesting
     public synchronized CompletableFuture<Boolean> closeRegistration(
-            @Nullable BiFunction<Class<? extends Repository>, List<SqlDatabaseManager>, SqlDatabaseManager> conflictResolver
+            @Nullable ThrowingBiFunction<Class<? extends Repository>, List<SqlDatabaseManager>, SqlDatabaseManager> conflictResolver
     ) {
         if (registrationClosed) return CompletableFuture.completedFuture(false);
         registrationClosed = true;
@@ -435,14 +466,17 @@ public final class RepositoryRegistry {
             for (var r : registrations) {
                 if (r.onReady != null) {
                     if (r.readyExecutor != null) {
-                        // Async: errors are logged but cannot be propagated into the future
+                        // Async: errors are logged but cannot be propagated into the future as it may
+                        //  have completed before the async handler has completed.
                         ThrowingConsumer<RepositoryRegistry> onReady = r.onReady;
                         r.readyExecutor.execute(() -> {
                             try {
                                 onReady.accept(this);
                             } catch (Throwable ex) {
-                                Logger.getLogger("RepositoryRegistry").severe(
-                                        "onReady threw for " + r.platformHandle.name() + ": " + ex);
+                                Logger.getLogger("RepositoryRegistry").log(
+                                        Level.SEVERE,
+                                        "async onReady threw for " + r.platformHandle.name(),
+                                        ex);
                             }
                         });
                     } else {
@@ -477,7 +511,7 @@ public final class RepositoryRegistry {
      * </ul>
      * </p>
      *
-     * @param platformHandle The plugin whose JAR file should be scanned.
+     * @param platformHandle The plugin identifier and dependency checker.
      * @param scope          The class loader used to locate jar resources.
      * @throws MigrationParseException           If an error occurred while loading db migration resources.
      * @throws RepositoryInitializationException If an I/O error occurs or classes cannot be resolved.
@@ -505,13 +539,17 @@ public final class RepositoryRegistry {
                 Class<? extends Repository> apiClass = Class.forName(apiName, false, scope)
                         .asSubclass(Repository.class);
                 Class<? extends Repository> implClass = Class.forName(implName, false, scope)
-                        .asSubclass(Repository.class);
+                        .asSubclass(apiClass);
 
-                // Validate that the impl properly declares this api
-                Repository.findRepositoryApi(implClass); // throws if not valid
+                // Validate that the impl properly adheres to the Repository contract.
+                // We already know implClass is-a apiClass.
+                Repository.identifyRepositoryApi(implClass); // throws if not valid
 
                 synchronized (this) {
                     var existing = implBindings.get(apiClass);
+                    // TODO: evaluate if this logic is stable or not; how does it behave when 3 or more plugins
+                    //  conflict; give platform an opportunity to step in; don't fail to process other walked
+                    //  assets because one failed like this
                     if (existing != null && existing != implClass) {
                         throw new RepositoryInitializationException(
                                 "Conflicting impl bindings for " + apiName
@@ -528,19 +566,6 @@ public final class RepositoryRegistry {
     }
 
     // -----------------------------------------------------------------------
-    // Repository validation helpers
-    // -----------------------------------------------------------------------
-
-    private static void validateRepositoryApi(@NotNull Class<? extends Repository> api) {
-        if (!api.isInterface()) {
-            throw new IllegalArgumentException(api.getName() + " must be an interface.");
-        }
-        if (api.getAnnotation(RepositoryApi.class) == null) {
-            throw new IllegalArgumentException(api.getName() + " is missing the required @RepositoryApi annotation.");
-        }
-    }
-
-    // -----------------------------------------------------------------------
     // Repository Composition
     // -----------------------------------------------------------------------
 
@@ -548,6 +573,8 @@ public final class RepositoryRegistry {
      * Registers a {@link RepositoryComposition} implementation with an auto-discovered constructor.
      * The class must have either a {@code (RepositoryRegistry)} or no-arg constructor.
      * <p>Must be called before {@link #closeRegistration()}.</p>
+     * @apiNote Check {@link #isAcceptingRegistrations()} before calling outside of
+     * {@link #register(PlatformHandle, Object)}'s {@code onConfigure} callback.
      */
     public synchronized <T extends RepositoryComposition> void registerComposition(
             @NotNull Class<T> compositionType
@@ -559,6 +586,8 @@ public final class RepositoryRegistry {
     /**
      * Registers a {@link RepositoryComposition} implementation with a custom creator function.
      * <p>Must be called before {@link #closeRegistration()}.</p>
+     * @apiNote Check {@link #isAcceptingRegistrations()} before calling outside of
+     * {@link #register(PlatformHandle, Object)}'s {@code onConfigure} callback.
      */
     public synchronized <T extends RepositoryComposition> void registerComposition(
             @NotNull Class<T> compositionType,
@@ -568,6 +597,7 @@ public final class RepositoryRegistry {
         registerCompositionInternal(compositionType, creator);
     }
 
+    /// May be called at any time, not subject to registration window.
     @SuppressWarnings("unchecked")
     private <T extends RepositoryComposition> void registerCompositionInternal(
             Class<T> compositionType,
@@ -577,8 +607,10 @@ public final class RepositoryRegistry {
             throw new IllegalArgumentException("compositionType must be a non-interface, non-abstract class.");
         }
         // Register for the full concrete hierarchy (most-specific wins via last-write)
+        // TODO: "most-specific wins via last-write" is dangerous outside of isAcceptingRegistrations()
         Class<?> current = compositionType;
         while (current != null && RepositoryComposition.class.isAssignableFrom(current)) {
+            // TODO: be sure this behavior is documented
             if (!current.isInterface() && !Modifier.isAbstract(current.getModifiers())) {
                 compositionCreators.put((Class<? extends RepositoryComposition>) current, creator);
             }
@@ -603,8 +635,7 @@ public final class RepositoryRegistry {
         var creator = compositionCreators.get(compositionType);
         if (creator == null) {
             // Auto-register on first access
-            @SuppressWarnings("unchecked")
-            var typedCreator = (ThrowingFunction<RepositoryRegistry, T>) discoverCompositionCreator(compositionType);
+            var typedCreator = discoverCompositionCreator(compositionType);
             registerCompositionInternal(compositionType, typedCreator);
             creator = typedCreator;
         }
@@ -621,6 +652,7 @@ public final class RepositoryRegistry {
         Class<?> current = compositionType;
         while (current != null && RepositoryComposition.class.isAssignableFrom(current)) {
             if (!current.isInterface() && !Modifier.isAbstract(current.getModifiers())) {
+                // TODO: this is dangerous, may clobber when late-binding
                 compositeInstances.put((Class<? extends RepositoryComposition>) current, instance);
             }
             current = current.getSuperclass();
@@ -632,6 +664,7 @@ public final class RepositoryRegistry {
             // Roll back flyweight registrations on failure
             current = compositionType;
             while (current != null && RepositoryComposition.class.isAssignableFrom(current)) {
+                // TODO: unsafe assumption about binding ownership
                 compositeInstances.remove(current, instance);
                 current = current.getSuperclass();
             }
@@ -641,7 +674,6 @@ public final class RepositoryRegistry {
         return instance;
     }
 
-    @SuppressWarnings("unchecked")
     private <T extends RepositoryComposition> @NotNull ThrowingFunction<RepositoryRegistry, T> discoverCompositionCreator(
             @NotNull Class<T> compositionType
     ) {
@@ -681,13 +713,14 @@ public final class RepositoryRegistry {
         private @Nullable ThrowingConsumer<RegistrationBootstrappingContext> onConfigure;
         private @Nullable ThrowingConsumer<RepositoryRegistry> onReady;
         private @Nullable Executor readyExecutor;
-        boolean mutable = true;
+        private boolean mutable = true;
 
         private RegistrationHelper(@NotNull PlatformHandle platformHandle) {
             this.ordinal = ORDINAL_PROVIDER.incrementAndGet();
             this.platformHandle = platformHandle;
         }
 
+        // TODO: improve docs
         /** Sets the callback invoked during the configure phase (provider publication). */
         public RegistrationHelper onConfigure(ThrowingConsumer<RegistrationBootstrappingContext> op) {
             if (!mutable) throw new IllegalStateException("RegistrationHelper is no longer mutable.");
@@ -695,6 +728,7 @@ public final class RepositoryRegistry {
             return this;
         }
 
+        // TODO: improve docs
         /** Sets the callback invoked during the ready phase (repository and composition access). */
         public RegistrationHelper onReady(ThrowingConsumer<RepositoryRegistry> op) {
             if (!mutable) throw new IllegalStateException("RegistrationHelper is no longer mutable.");

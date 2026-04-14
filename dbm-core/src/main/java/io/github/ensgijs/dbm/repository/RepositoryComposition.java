@@ -3,7 +3,9 @@ package io.github.ensgijs.dbm.repository;
 import org.jetbrains.annotations.NotNull;
 
 /**
- * Functional aggregators that wrap one or more {@link Repository} instances.
+ * Use {@code RepositoryComposition}'s to contain the business logic required to coordinate actions across
+ * multiple {@link io.github.ensgijs.dbm.repository.Repository}'s.
+ *
  * <p>
  * {@link RepositoryRegistry} offers facilities to flyweight composition instances making shared instances globally
  * available (effectively singleton). Implementors must define a constructor taking only a {@link RepositoryRegistry},
@@ -12,7 +14,7 @@ import org.jetbrains.annotations.NotNull;
  * of {@link RepositoryRegistry#getCompositeRepository(Class)}.
  * </p>
  * <p>
- * {@link RepositoryComposition}'s may not possess the {@link RepositoryApi} annotation, implement {@link Repository}
+ * {@link RepositoryComposition}'s may not possess the {@link RepositoryApi} annotation, implement {@link Repository},
  * or own tables directly.
  * </p>
  * @apiNote <b>Best Practices:</b>
