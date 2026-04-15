@@ -23,8 +23,10 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Function;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
 
 /**
  * A service-locator registry that binds {@link Repository} API interfaces to provider
@@ -42,7 +44,8 @@ import java.util.logging.Logger;
  *     register {@link SqlDatabaseManager} providers and
  *     {@link RegistrationBootstrappingContext#registerComposition} to register
  *     {@link RepositoryComposition} aggregators.</li>
- * <li><b>Ready phase</b> – call {@link #closeRegistration(ThrowingBiFunction)} after everyone has had a chance to
+ * <li><b>Ready phase</b> – call {@link #closeRegistration()} (or the overload accepting a
+ *     {@code conflictResolver}) after everyone has had a chance to
  *     {@link #register(PlatformHandle, ClassLoader)}.  Provider conflicts from {@link PublishMode#CONTEST CONTEST}
  *     publications are resolved, then {@link RegistrationHelper#onReady(ThrowingConsumer)} callbacks
  *     are invoked, after which the registry is fully operational.</li>
@@ -84,8 +87,14 @@ public final class RepositoryRegistry {
     /// Flyweight storage for composition instances: class → singleton
     private final Map<Class<? extends RepositoryComposition>, RepositoryComposition> compositeInstances = new HashMap<>();
 
-    /// Registered composition creators: concrete class → creator function
-    private final Map<Class<? extends RepositoryComposition>, ThrowingFunction<RepositoryRegistry, ? extends RepositoryComposition>> compositionCreators = new HashMap<>();
+    /// Direct (non-replaceable) composition creators: concrete class → creator function
+    private final Map<Class<? extends RepositoryComposition>, ThrowingFunction<RepositoryRegistry, ? extends RepositoryComposition>> directCompositionCreators = new HashMap<>();
+
+    /// Replaceable composition contests: abstract key → list of competitors
+    private final Map<Class<? extends RepositoryComposition>, List<CompositionContestEntry>> compositionContests = new LinkedHashMap<>();
+
+    /// Resolved after phase 1.75 in closeRegistration: lookup key → creator function
+    private volatile Map<Class<? extends RepositoryComposition>, ThrowingFunction<RepositoryRegistry, ? extends RepositoryComposition>> resolvedCompositionCreators = null;
 
     // -----------------------------------------------------------------------
     // Singleton global registry
@@ -183,7 +192,31 @@ public final class RepositoryRegistry {
         CONTEST
     }
 
-    private record ProviderEntry(@NotNull SqlDatabaseManager manager, @NotNull PublishMode mode) {}
+    /**
+     * Carries a provider candidate and the platform handle that registered it.
+     * Passed to the conflict resolver in {@link #closeRegistration}.
+     */
+    public record ProviderCandidate(
+            @NotNull SqlDatabaseManager manager,
+            @Nullable PlatformHandle registeredBy) {}
+
+    /**
+     * Carries a composition candidate and the platform handle that registered it.
+     * Passed to the composition conflict resolver in {@link #closeRegistration}.
+     */
+    public record CompositionCandidate(
+            @NotNull Class<? extends RepositoryComposition> concreteType,
+            @Nullable PlatformHandle registeredBy) {}
+
+    private record ProviderEntry(
+            @NotNull SqlDatabaseManager manager,
+            @NotNull PublishMode mode,
+            @Nullable PlatformHandle registeredBy) {}
+
+    private record CompositionContestEntry(
+            Class<? extends RepositoryComposition> concreteType,
+            ThrowingFunction<RepositoryRegistry, ? extends RepositoryComposition> creator,
+            @Nullable PlatformHandle registeredBy) {}
 
     /**
      * Registers {@code manager} as the exclusive provider for {@code api}.
@@ -197,7 +230,7 @@ public final class RepositoryRegistry {
             @NotNull Class<T> api,
             @NotNull SqlDatabaseManager manager
     ) throws RepositoryInitializationException {
-        publish(api, manager, PublishMode.EXCLUSIVE);
+        publishInternal(api, manager, PublishMode.EXCLUSIVE, manager.getPlatformHandle());
     }
 
     /**
@@ -215,6 +248,14 @@ public final class RepositoryRegistry {
             @NotNull SqlDatabaseManager manager,
             @NotNull PublishMode mode
     ) throws RepositoryInitializationException {
+        publishInternal(api, manager, mode, manager.getPlatformHandle());
+    }
+
+    private synchronized <T extends Repository> void publishInternal(
+            @NotNull Class<T> api,
+            @NotNull SqlDatabaseManager manager,
+            @NotNull PublishMode mode,
+            @Nullable PlatformHandle registeredBy) throws RepositoryInitializationException {
         if (registrationClosed) throw new IllegalStateException("Registration is closed!");
         Repository.validateRepositoryApi(api);  // throws if invalid
 
@@ -227,7 +268,7 @@ public final class RepositoryRegistry {
                                 + ": already published by " + existing.manager().getSqlConnectionConfig().connectionId());
             }
         }
-        list.add(new ProviderEntry(manager, mode));
+        list.add(new ProviderEntry(manager, mode, registeredBy));
     }
 
     /**
@@ -370,11 +411,27 @@ public final class RepositoryRegistry {
      * </p>
      */
     public CompletableFuture<Boolean> closeRegistration() {
-        return closeRegistration(null);
+        return closeRegistration(null, null);
     }
 
     /**
      * Closes registration, resolves contested providers, and runs lifecycle callbacks.
+     * Equivalent to {@link #closeRegistration(ThrowingBiFunction, ThrowingBiFunction)
+     * closeRegistration(conflictResolver, null)}.
+     *
+     * @param conflictResolver Called for each contested provider api with the list of provider candidates.
+     *                         May be {@code null} if no provider contests are expected.
+     * @return A future that resolves to {@code true} on the first successful close, {@code false}
+     *         on any subsequent call, or completes exceptionally on error.
+     */
+    public synchronized CompletableFuture<Boolean> closeRegistration(
+            @Nullable ThrowingBiFunction<Class<? extends Repository>, List<ProviderCandidate>, SqlDatabaseManager> conflictResolver
+    ) {
+        return closeRegistration(conflictResolver, null);
+    }
+
+    /**
+     * Closes registration, resolves contested providers and composition contests, and runs lifecycle callbacks.
      * Performs best-effort completeness, if any phase fails for any registrant no further
      * phases for that registrant will be executed. However, execution of other registrants
      * will proceed.
@@ -387,19 +444,26 @@ public final class RepositoryRegistry {
      *     virtual thread.</li>
      * <li>Resolves contested providers using {@code conflictResolver}; if there are unresolved
      *     contests and no resolver was supplied the future completes exceptionally.</li>
+     * <li>Resolves composition contests using {@code compositionConflictResolver}; merges direct
+     *     registrations and contest winners into the resolved composition creator map.</li>
      * <li>Runs all {@link RegistrationHelper#onReady} callbacks in dependency order.</li>
      * </ol>
      *
-     * @param conflictResolver Called for each contested api with the list of provider managers.
+     * @param conflictResolver Called for each contested provider api with the list of provider candidates.
      *                         Must return a non-null winner from that list, or {@code null} to
      *                         reject all (which causes the future to complete exceptionally).
-     *                         May be {@code null} if no contests are expected.
+     *                         May be {@code null} if no provider contests are expected.
+     * @param compositionConflictResolver Called for each contested composition abstract key with the list
+     *                         of competing composition candidates. Must return a non-null winner from that list,
+     *                         or {@code null} to reject all (which causes the future to complete exceptionally).
+     *                         May be {@code null} if no composition contests are expected.
      * @return A future that resolves to {@code true} on the first successful close, {@code false}
      *         on any subsequent call, or completes exceptionally on error.
      */
     @VisibleForTesting
     public synchronized CompletableFuture<Boolean> closeRegistration(
-            @Nullable ThrowingBiFunction<Class<? extends Repository>, List<SqlDatabaseManager>, SqlDatabaseManager> conflictResolver
+            @Nullable ThrowingBiFunction<Class<? extends Repository>, List<ProviderCandidate>, SqlDatabaseManager> conflictResolver,
+            @Nullable ThrowingBiFunction<Class<? extends RepositoryComposition>, List<CompositionCandidate>, Class<? extends RepositoryComposition>> compositionConflictResolver
     ) {
         if (registrationClosed) return CompletableFuture.completedFuture(false);
         registrationClosed = true;
@@ -442,9 +506,12 @@ public final class RepositoryRegistry {
                                         + " but no conflictResolver was provided to closeRegistration().");
                         if (err == null) err = e; else err.addSuppressed(e);
                     } else {
-                        var managers = contestants.stream().map(ProviderEntry::manager).toList();
+                        var candidates = contestants.stream()
+                                .map(e -> new ProviderCandidate(e.manager(), e.registeredBy()))
+                                .toList();
                         try {
-                            var winner = conflictResolver.apply(entry.getKey(), managers);
+                            SqlDatabaseManager winner = conflictResolver.apply(entry.getKey(), candidates);
+                            var managers = candidates.stream().map(ProviderCandidate::manager).toList();
                             if (winner == null || !managers.contains(winner)) {
                                 var e = new RepositoryInitializationException(
                                         "conflictResolver returned an invalid winner for " + entry.getKey().getName());
@@ -461,6 +528,61 @@ public final class RepositoryRegistry {
                 }
             }
             resolvedProviders = Collections.unmodifiableMap(resolved);
+
+            // Phase 1.75: Resolve composition contests and build resolved creator map
+            Map<Class<? extends RepositoryComposition>, ThrowingFunction<RepositoryRegistry, ? extends RepositoryComposition>> resolvedCreators = new HashMap<>();
+
+            // Merge direct (non-replaceable) registrations
+            resolvedCreators.putAll(directCompositionCreators);
+
+            // Resolve replaceable (contest) registrations
+            for (var entry : compositionContests.entrySet()) {
+                var abstractKey = entry.getKey();
+                var contestants = entry.getValue();
+
+                if (contestants.size() == 1) {
+                    resolvedCreators.put(abstractKey, contestants.getFirst().creator());
+                } else {
+                    // Multiple competitors — need conflict resolution
+                    if (compositionConflictResolver == null) {
+                        var concreteNames = contestants.stream()
+                                .map(c -> c.concreteType().getName())
+                                .collect(Collectors.joining(", "));
+                        var e = new RepositoryInitializationException(
+                                "Composition contest conflict for " + abstractKey.getName()
+                                        + " (competitors: " + concreteNames + ")"
+                                        + " but no compositionConflictResolver was provided to closeRegistration().");
+                        if (err == null) err = e; else err.addSuppressed(e);
+                    } else {
+                        var candidateList = contestants.stream()
+                                .map(c -> new CompositionCandidate(c.concreteType(), c.registeredBy()))
+                                .toList();
+                        var concreteTypes = candidateList.stream().map(CompositionCandidate::concreteType).toList();
+                        try {
+                            Class<? extends RepositoryComposition> winnerType =
+                                    compositionConflictResolver.apply(abstractKey, candidateList);
+                            if (winnerType == null || !concreteTypes.contains(winnerType)) {
+                                var e = new RepositoryInitializationException(
+                                        "compositionConflictResolver returned an invalid winner for " + abstractKey.getName());
+                                if (err == null) err = e; else err.addSuppressed(e);
+                            } else {
+                                var winnerCreator = contestants.stream()
+                                        .filter(c -> c.concreteType() == winnerType)
+                                        .findFirst()
+                                        .orElseThrow()
+                                        .creator();
+                                resolvedCreators.put(abstractKey, winnerCreator);
+                            }
+                        } catch (Throwable ex) {
+                            var e = new RepositoryInitializationException(
+                                    "compositionConflictResolver threw for " + abstractKey.getName(), ex);
+                            if (err == null) err = e; else err.addSuppressed(e);
+                        }
+                    }
+                }
+            }
+
+            resolvedCompositionCreators = Collections.unmodifiableMap(resolvedCreators);
 
             // Phase 2: onReady
             for (var r : registrations) {
@@ -523,6 +645,10 @@ public final class RepositoryRegistry {
         if (registrationClosed) throw new IllegalStateException("Registration is closed!");
 
         MigrationLoader.loadMigrations(platformHandle, scope);
+
+        // Binding conflicts are collected so all resource files are processed before reporting.
+        // Hard errors (missing class, bad content, invalid contract) still propagate immediately.
+        List<RepositoryInitializationException> bindingConflicts = new ArrayList<>();
         try {
             resourceWalker.visit(scope, DB_REGISTRY_RESOURCE_PATH, entry -> {
                 String apiName = entry.path().substring(DB_REGISTRY_RESOURCE_PATH.length());
@@ -547,21 +673,28 @@ public final class RepositoryRegistry {
 
                 synchronized (this) {
                     var existing = implBindings.get(apiClass);
-                    // TODO: evaluate if this logic is stable or not; how does it behave when 3 or more plugins
-                    //  conflict; give platform an opportunity to step in; don't fail to process other walked
-                    //  assets because one failed like this
                     if (existing != null && existing != implClass) {
-                        throw new RepositoryInitializationException(
+                        // Accumulate conflicts rather than throwing so all entries are still scanned.
+                        bindingConflicts.add(new RepositoryInitializationException(
                                 "Conflicting impl bindings for " + apiName
                                         + ": existing=" + existing.getName() + ", new=" + implName
-                                        + ". Resolve by having only one plugin declare this binding, or call bindImpl() explicitly.");
+                                        + ". Resolve by having only one plugin declare this binding,"
+                                        + " or call bindImpl() explicitly."));
+                    } else {
+                        implBindings.put(apiClass, implClass);
                     }
-                    implBindings.put(apiClass, implClass);
                 }
             });
         } catch (Exception ex) {
             throw new RepositoryInitializationException(
                     "Error while scanning plugin jar resources: " + platformHandle.name(), BubbleUpException.unwrap(ex));
+        }
+
+        if (!bindingConflicts.isEmpty()) {
+            var combined = new RepositoryInitializationException(
+                    bindingConflicts.size() + " impl binding conflict(s) found while scanning " + platformHandle.name() + ".");
+            bindingConflicts.forEach(combined::addSuppressed);
+            throw combined;
         }
     }
 
@@ -572,7 +705,20 @@ public final class RepositoryRegistry {
     /**
      * Registers a {@link RepositoryComposition} implementation with an auto-discovered constructor.
      * The class must have either a {@code (RepositoryRegistry)} or no-arg constructor.
+     * <p>
+     * Two valid lineages are supported:
+     * <ol>
+     * <li>{@code Concretion implements RepositoryComposition} — direct, non-replaceable. Stored under
+     *     the concrete key in {@code directCompositionCreators}.</li>
+     * <li>{@code Concretion extends AbstractBase implements RepositoryComposition} — replaceable.
+     *     Stored as a competitor in {@code compositionContests} under the abstract key.</li>
+     * </ol>
      * <p>Must be called before {@link #closeRegistration()}.</p>
+     * <p>Note: {@code compositionType} must be a concrete (non-abstract, non-interface) class.
+     * Abstract types are not accepted here; they are the result of validating a registered
+     * concretion's lineage, not an input to registration.</p>
+     * @throws IllegalArgumentException If {@code compositionType} is abstract or an interface, if it extends
+     *     a concrete {@link RepositoryComposition}, or if the abstract intermediary chain is deeper than one.
      * @apiNote Check {@link #isAcceptingRegistrations()} before calling outside of
      * {@link #register(PlatformHandle, Object)}'s {@code onConfigure} callback.
      */
@@ -580,12 +726,23 @@ public final class RepositoryRegistry {
             @NotNull Class<T> compositionType
     ) {
         if (registrationClosed) throw new IllegalStateException("Registration is closed!");
-        registerCompositionInternal(compositionType, discoverCompositionCreator(compositionType));
+        registerCompositionInternal(compositionType, discoverCompositionCreator(compositionType), null);
     }
 
     /**
      * Registers a {@link RepositoryComposition} implementation with a custom creator function.
+     * <p>
+     * Two valid lineages are supported:
+     * <ol>
+     * <li>{@code Concretion implements RepositoryComposition} — direct, non-replaceable.</li>
+     * <li>{@code Concretion extends AbstractBase implements RepositoryComposition} — replaceable.</li>
+     * </ol>
      * <p>Must be called before {@link #closeRegistration()}.</p>
+     * <p>Note: {@code compositionType} must be a concrete (non-abstract, non-interface) class.
+     * Abstract types are not accepted here; they are the result of validating a registered
+     * concretion's lineage, not an input to registration.</p>
+     * @throws IllegalArgumentException If {@code compositionType} is abstract or an interface, if it extends
+     *     a concrete {@link RepositoryComposition}, or if the abstract intermediary chain is deeper than one.
      * @apiNote Check {@link #isAcceptingRegistrations()} before calling outside of
      * {@link #register(PlatformHandle, Object)}'s {@code onConfigure} callback.
      */
@@ -594,50 +751,116 @@ public final class RepositoryRegistry {
             @NotNull ThrowingFunction<@NotNull RepositoryRegistry, @NotNull T> creator
     ) {
         if (registrationClosed) throw new IllegalStateException("Registration is closed!");
-        registerCompositionInternal(compositionType, creator);
+        registerCompositionInternal(compositionType, creator, null);
     }
 
-    /// May be called at any time, not subject to registration window.
+    /**
+     * Determines the lineage of {@code compositionType} using {@link RepositoryComposition#identifyAbstractKey}
+     * and routes it to either {@code directCompositionCreators} (lineage 1) or {@code compositionContests} (lineage 2).
+     */
     @SuppressWarnings("unchecked")
     private <T extends RepositoryComposition> void registerCompositionInternal(
             Class<T> compositionType,
-            ThrowingFunction<RepositoryRegistry, ? extends T> creator
+            ThrowingFunction<RepositoryRegistry, ? extends T> creator,
+            @Nullable PlatformHandle registeredBy
     ) {
-        if (compositionType.isInterface() || Modifier.isAbstract(compositionType.getModifiers())) {
-            throw new IllegalArgumentException("compositionType must be a non-interface, non-abstract class.");
-        }
-        // Register for the full concrete hierarchy (most-specific wins via last-write)
-        // TODO: "most-specific wins via last-write" is dangerous outside of isAcceptingRegistrations()
-        Class<?> current = compositionType;
-        while (current != null && RepositoryComposition.class.isAssignableFrom(current)) {
-            // TODO: be sure this behavior is documented
-            if (!current.isInterface() && !Modifier.isAbstract(current.getModifiers())) {
-                compositionCreators.put((Class<? extends RepositoryComposition>) current, creator);
-            }
-            current = current.getSuperclass();
+        // Use the static helper — both validates AND identifies lineage
+        Class<? extends RepositoryComposition> abstractKey = RepositoryComposition.identifyAbstractKey(compositionType);
+        if (abstractKey != null) {
+            // Lineage 2: replaceable — append to contest under the abstract key
+            compositionContests
+                    .computeIfAbsent(abstractKey, k -> new ArrayList<>())
+                    .add(new CompositionContestEntry(compositionType, creator, registeredBy));
+        } else {
+            // Lineage 1: direct — store under the concrete key (last-write wins)
+            directCompositionCreators.put(compositionType, creator);
         }
     }
 
     /**
      * Retrieves the flyweight instance of a composition.
      *
-     * @throws IllegalStateException              If called before registration is closed.
-     * @throws RepositoryInitializationException  If instantiation or initialization fails.
+     * <p>After {@link #closeRegistration()} completes:</p>
+     * <ul>
+     * <li>If {@code compositionType} is a concrete type registered as a replaceable competitor
+     *     (not the abstract key), throws {@link RepositoryInitializationException} naming the
+     *     abstract key to use instead.</li>
+     * <li>If {@code compositionType} is an abstract/interface type not in the resolved map,
+     *     throws {@link RepositoryInitializationException}.</li>
+     * <li>Otherwise, returns the flyweight via the resolved creator. Auto-discovery still works
+     *     for direct concrete types that were not explicitly registered.</li>
+     * </ul>
+     *
+     * @throws IllegalStateException              If called before registration is closed or while
+     *                                            {@code closeRegistration()} is still in progress.
+     * @throws RepositoryInitializationException  If the type is an invalid lookup key, is not found,
+     *                                            or if instantiation or initialization fails.
+     */
+    public <T extends RepositoryComposition> @NotNull T getCompositeRepository(
+            @NotNull Class<T> compositionType
+    ) throws RepositoryInitializationException {
+        return getCompositeRepository(compositionType, null);
+    }
+
+    /**
+     * Retrieves the flyweight instance of a composition, with an optional fallback creator.
+     *
+     * <ul>
+     * <li>If {@code compositionType} is in {@code resolvedCompositionCreators}, the resolved creator
+     *     is used and {@code fallbackCreator} is ignored.</li>
+     * <li>If {@code compositionType} is a concrete type whose lineage identifies it as a replaceable
+     *     competitor (i.e. has an abstract key), throws {@link RepositoryInitializationException}
+     *     naming the abstract key to use instead.</li>
+     * <li>Otherwise, uses {@code fallbackCreator} if provided. This is the late-binding path for
+     *     abstract slots. If {@code fallbackCreator} is {@code null} and auto-discovery is not
+     *     applicable, throws {@link RepositoryInitializationException}.</li>
+     * </ul>
+     *
+     * @throws IllegalStateException              If called before registration is closed or while
+     *                                            {@code closeRegistration()} is still in progress.
+     * @throws RepositoryInitializationException  If the type is an invalid lookup key, is not found,
+     *                                            or if instantiation or initialization fails.
      */
     @SuppressWarnings("unchecked")
     public synchronized <T extends RepositoryComposition> @NotNull T getCompositeRepository(
-            @NotNull Class<T> compositionType
+            @NotNull Class<T> compositionType,
+            @Nullable ThrowingFunction<@NotNull RepositoryRegistry, @NotNull T> fallbackCreator
     ) throws RepositoryInitializationException {
         if (!registrationClosed) throw new IllegalStateException("Cannot access composite flyweights before registration is closed.");
+        if (resolvedCompositionCreators == null) throw new IllegalStateException("closeRegistration() is still in progress.");
+
         RepositoryComposition cached = compositeInstances.get(compositionType);
         if (cached != null) return (T) cached;
 
-        var creator = compositionCreators.get(compositionType);
-        if (creator == null) {
-            // Auto-register on first access
-            var typedCreator = discoverCompositionCreator(compositionType);
-            registerCompositionInternal(compositionType, typedCreator);
-            creator = typedCreator;
+        ThrowingFunction<RepositoryRegistry, ? extends RepositoryComposition> creator =
+                resolvedCompositionCreators.get(compositionType);
+
+        if (creator != null) {
+            // Resolved creator wins; fallbackCreator is ignored.
+        } else if (fallbackCreator != null) {
+            // Late-binding fallback path.
+            creator = fallbackCreator;
+        } else {
+            // Auto-discover on first access for direct concrete types not explicitly registered.
+            if (compositionType.isInterface() || Modifier.isAbstract(compositionType.getModifiers())) {
+                throw new RepositoryInitializationException(
+                        "No resolved creator found for abstract/interface composition type " + compositionType.getName()
+                                + ". Ensure it is registered and that closeRegistration() has completed.");
+            }
+            // For concrete types not in the resolved map: check lineage via the contract helper
+            try {
+                Class<? extends RepositoryComposition> abstractKey = RepositoryComposition.identifyAbstractKey(compositionType);
+                if (abstractKey != null) {
+                    throw new RepositoryInitializationException(
+                            compositionType.getName() + " is a concretion of replaceable abstract " + abstractKey.getName()
+                            + ". Use " + abstractKey.getName()
+                            + " as the lookup type and pass a custom creator such as MyImpl::new instead.");
+                }
+            } catch (IllegalArgumentException e) {
+                throw new RepositoryInitializationException(
+                        compositionType.getName() + " has an invalid composition lineage: " + e.getMessage(), e);
+            }
+            creator = discoverCompositionCreator(compositionType);
         }
 
         T instance;
@@ -647,27 +870,14 @@ public final class RepositoryRegistry {
             throw new RepositoryInitializationException("Error while creating instance of " + compositionType.getName(), ex);
         }
 
-        // Pre-populate flyweight map for the full concrete hierarchy before onInitialize,
-        // so circular references resolve correctly.
-        Class<?> current = compositionType;
-        while (current != null && RepositoryComposition.class.isAssignableFrom(current)) {
-            if (!current.isInterface() && !Modifier.isAbstract(current.getModifiers())) {
-                // TODO: this is dangerous, may clobber when late-binding
-                compositeInstances.put((Class<? extends RepositoryComposition>) current, instance);
-            }
-            current = current.getSuperclass();
-        }
+        // Register the flyweight under the lookup key before onInitialize so that circular
+        // references between compositions resolve correctly.
+        compositeInstances.put(compositionType, instance);
 
         try {
             instance.onInitialize(this);
         } catch (Throwable ex) {
-            // Roll back flyweight registrations on failure
-            current = compositionType;
-            while (current != null && RepositoryComposition.class.isAssignableFrom(current)) {
-                // TODO: unsafe assumption about binding ownership
-                compositeInstances.remove(current, instance);
-                current = current.getSuperclass();
-            }
+            compositeInstances.remove(compositionType, instance);
             throw new RepositoryInitializationException("Error while initializing " + compositionType.getName(), ex);
         }
 
@@ -703,6 +913,52 @@ public final class RepositoryRegistry {
     }
 
     // -----------------------------------------------------------------------
+    // Default conflict resolvers
+    // -----------------------------------------------------------------------
+
+    /**
+     * Default provider conflict resolver based on {@link PlatformHandle} dependency order.
+     * Returns the manager registered by the platform that is most downstream (i.e., depends on all
+     * other registrants directly). Returns {@code null} if no unique downstream winner exists
+     * (indicating a true conflict that requires user-supplied resolution).
+     */
+    public static @Nullable SqlDatabaseManager defaultProviderConflictResolver(
+            @NotNull Class<? extends Repository> api,
+            @NotNull List<ProviderCandidate> candidates) {
+        return resolveByDependencyOrder(candidates, ProviderCandidate::registeredBy, ProviderCandidate::manager);
+    }
+
+    /**
+     * Default composition conflict resolver based on {@link PlatformHandle} dependency order.
+     * Returns the concrete type registered by the platform that is most downstream. Returns
+     * {@code null} if no unique downstream winner exists.
+     */
+    public static @Nullable Class<? extends RepositoryComposition> defaultCompositionConflictResolver(
+            @NotNull Class<? extends RepositoryComposition> abstractKey,
+            @NotNull List<CompositionCandidate> candidates) {
+        return resolveByDependencyOrder(candidates, CompositionCandidate::registeredBy, CompositionCandidate::concreteType);
+    }
+
+    private static <T, R> @Nullable R resolveByDependencyOrder(
+            @NotNull List<T> candidates,
+            @NotNull Function<T, @Nullable PlatformHandle> handleExtractor,
+            @NotNull Function<T, R> resultExtractor) {
+        if (candidates.size() == 1) return resultExtractor.apply(candidates.getFirst());
+        candidates:
+        for (T candidate : candidates) {
+            PlatformHandle ph = handleExtractor.apply(candidate);
+            if (ph == null) continue;
+            for (T other : candidates) {
+                if (other == candidate) continue;
+                PlatformHandle otherPh = handleExtractor.apply(other);
+                if (otherPh == null || !ph.dependsOn(otherPh)) continue candidates;
+            }
+            return resultExtractor.apply(candidate);
+        }
+        return null;
+    }
+
+    // -----------------------------------------------------------------------
     // RegistrationHelper
     // -----------------------------------------------------------------------
 
@@ -720,16 +976,30 @@ public final class RepositoryRegistry {
             this.platformHandle = platformHandle;
         }
 
-        // TODO: improve docs
-        /** Sets the callback invoked during the configure phase (provider publication). */
+        /**
+         * Sets the callback invoked during the configure phase.
+         * <p>
+         * Use the supplied {@link RegistrationBootstrappingContext} to {@link RegistrationBootstrappingContext#publish publish}
+         * providers, {@link RegistrationBootstrappingContext#bindImpl bind} impl classes, and
+         * {@link RegistrationBootstrappingContext#registerComposition register} compositions.
+         * This callback is guaranteed to run before any {@link #onReady} callbacks.
+         * </p>
+         */
         public RegistrationHelper onConfigure(ThrowingConsumer<RegistrationBootstrappingContext> op) {
             if (!mutable) throw new IllegalStateException("RegistrationHelper is no longer mutable.");
             this.onConfigure = op;
             return this;
         }
 
-        // TODO: improve docs
-        /** Sets the callback invoked during the ready phase (repository and composition access). */
+        /**
+         * Sets the callback invoked during the ready phase.
+         * <p>
+         * All providers have been resolved at this point; use the supplied {@link RepositoryRegistry}
+         * to access repositories via {@link RepositoryRegistry#get} and compositions via
+         * {@link RepositoryRegistry#getCompositeRepository}. This callback runs after all
+         * {@link #onConfigure} callbacks have completed.
+         * </p>
+         */
         public RegistrationHelper onReady(ThrowingConsumer<RepositoryRegistry> op) {
             if (!mutable) throw new IllegalStateException("RegistrationHelper is no longer mutable.");
             this.onReady = op;
@@ -777,7 +1047,7 @@ public final class RepositoryRegistry {
          */
         public <T extends Repository> void publish(@NotNull Class<T> api, @NotNull SqlDatabaseManager manager)
                 throws RepositoryInitializationException {
-            registry.publish(api, manager);
+            registry.publishInternal(api, manager, PublishMode.EXCLUSIVE, platformHandle);
         }
 
         /**
@@ -786,7 +1056,7 @@ public final class RepositoryRegistry {
          */
         public <T extends Repository> void publish(@NotNull Class<T> api, @NotNull SqlDatabaseManager manager,
                 @NotNull PublishMode mode) throws RepositoryInitializationException {
-            registry.publish(api, manager, mode);
+            registry.publishInternal(api, manager, mode, platformHandle);
         }
 
         /**
@@ -802,7 +1072,8 @@ public final class RepositoryRegistry {
          * @see RepositoryRegistry#registerComposition(Class)
          */
         public <T extends RepositoryComposition> void registerComposition(@NotNull Class<T> compositionType) {
-            registry.registerComposition(compositionType);
+            registry.registerCompositionInternal(
+                    compositionType, registry.discoverCompositionCreator(compositionType), platformHandle);
         }
 
         /**
@@ -813,7 +1084,7 @@ public final class RepositoryRegistry {
                 @NotNull Class<T> compositionType,
                 @NotNull ThrowingFunction<@NotNull RepositoryRegistry, @NotNull T> creator
         ) {
-            registry.registerComposition(compositionType, creator);
+            registry.registerCompositionInternal(compositionType, creator, platformHandle);
         }
     }
 }
