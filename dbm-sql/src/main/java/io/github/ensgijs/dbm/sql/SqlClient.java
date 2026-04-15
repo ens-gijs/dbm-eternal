@@ -4,6 +4,8 @@ import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import io.github.ensgijs.dbm.util.function.ThrowingBiConsumer;
 import io.github.ensgijs.dbm.util.function.ThrowingFunction;
+import io.github.ensgijs.dbm.util.objects.ConsumableSubscribableEvent;
+import io.github.ensgijs.dbm.util.objects.SubscribableEvent;
 import io.github.ensgijs.dbm.util.threading.LimitedVirtualThreadPerTaskExecutor;
 import io.github.ensgijs.dbm.platform.PlatformHandle;
 import org.jetbrains.annotations.NotNull;
@@ -28,11 +30,14 @@ import java.util.logging.Logger;
 public class SqlClient {
     private final static Logger logger = Logger.getLogger("SqlClient");
     protected final @NotNull PlatformHandle platformHandle;
+    private final ConsumableSubscribableEvent<SqlClient> onBeforePoolResetEvent = new ConsumableSubscribableEvent<>();
+    private final ConsumableSubscribableEvent<SqlClient> onAfterPoolResetEvent = new ConsumableSubscribableEvent<>();
     protected SqlConnectionConfig sqlConnectionConfig;
     protected @NotNull SqlDialect activeDialect = SqlDialect.UNDEFINED;
     protected HikariDataSource dataSource;
     protected final Function<@NotNull HikariConfig, HikariDataSource> hikariCreator;
     protected final LimitedVirtualThreadPerTaskExecutor asyncExecutor = new LimitedVirtualThreadPerTaskExecutor(1);
+    private volatile CompletableFuture<Boolean> pendingPoolReset;
 
     /**
      * Initializes the manager and attempts to load the database configuration
@@ -76,14 +81,19 @@ public class SqlClient {
     }
 
     /**
-     * Updates the connection configuration, reconnecting the pool if the new config differs
-     * from the current one (as determined by {@link SqlConnectionConfig#isEquivalent}).
+     * Updates the connection configuration, synchronously reconnecting the pool if the new config
+     * differs from the current one (as determined by {@link SqlConnectionConfig#isEquivalent}).
+     * <p>
+     * This overload does not drain in-flight async tasks before resetting the pool.
+     * Use {@link #setSqlConnectionConfig(SqlConnectionConfig, long, TimeUnit)} when live
+     * reconnection is needed and in-flight work must complete cleanly.
+     * </p>
      *
      * @param config The new connection configuration.
      * @return {@code true} if the configuration changed and a reconnection was performed;
      *         {@code false} if the config was equivalent to the current one and no action was taken.
      */
-    public boolean setSqlConnectionConfig(@NotNull SqlConnectionConfig config) {
+    public synchronized boolean setSqlConnectionConfig(@NotNull SqlConnectionConfig config) {
         final boolean connectionChanged = !config.isEquivalent(this.sqlConnectionConfig);
         if (connectionChanged) {
             logger.info("DB connection configuration changed, (re)connecting.");
@@ -92,6 +102,107 @@ public class SqlClient {
         }
         return connectionChanged;
     }
+
+    /**
+     * Asynchronously updates the connection configuration, draining in-flight async tasks before
+     * closing the old pool. Returns a future the caller can chain from.
+     * <p>
+     * Sequence of events on change:
+     * <ol>
+     * <li>Drain the async task queue, waiting up to {@code drainTimeout}/{@code drainTimeoutUnit}.</li>
+     * <li>Fire {@link #onBeforePoolResetEvent()} (subscribers may perform last-chance cleanup).</li>
+     * <li>Close the old pool and open a new one.</li>
+     * <li>Invoke the {@link #afterPoolReset()} hook (subclasses run migrations and cache invalidation here).</li>
+     * <li>Fire {@link #onAfterPoolResetEvent()} (subscribers may reinitialize).</li>
+     * </ol>
+     *
+     * @param config           The new connection configuration.
+     * @param drainTimeout     Maximum time to wait for in-flight tasks to complete.
+     * @param drainTimeoutUnit Time unit for {@code drainTimeout}.
+     * @return A future that resolves to {@code true} if the config changed and the pool was
+     *         reset, {@code false} if the config was equivalent and no action was taken, or
+     *         completes exceptionally if pool initialization fails.
+     */
+    public CompletableFuture<Boolean> setSqlConnectionConfig(
+            @NotNull SqlConnectionConfig config,
+            long drainTimeout,
+            @NotNull TimeUnit drainTimeoutUnit
+    ) {
+        final CompletableFuture<Boolean> future;
+        synchronized (this) {
+            if (config.isEquivalent(this.sqlConnectionConfig)) return CompletableFuture.completedFuture(false);
+            CompletableFuture<Boolean> pending = pendingPoolReset;
+            if (pending != null && !pending.isDone()) {
+                if (!config.isEquivalent(this.sqlConnectionConfig)) {
+                    logger.severe("setSqlConnectionConfig called with a conflicting configuration while a pool reset"
+                            + " to '" + this.sqlConnectionConfig.connectionId() + "' is already in progress."
+                            + " The new configuration '" + config.connectionId() + "' will be ignored."
+                            + " Chain from the returned future to sequence a subsequent reconfiguration.");
+                } else {
+                    logger.warning("setSqlConnectionConfig called while a pool reset is already in progress;"
+                            + " returning existing future.");
+                }
+                return pending;
+            }
+            logger.info("DB connection configuration changed, (re)connecting asynchronously.");
+            this.sqlConnectionConfig = config;
+            future = new CompletableFuture<>();
+            pendingPoolReset = future;
+        }
+        Thread.ofVirtual().start(() -> {
+            try {
+                if (asyncExecutor.isBusy()) {
+                    logger.warning(String.format(
+                            "Resetting pool while %d tasks are running and %d are queued;" +
+                            " waiting up to %d %s for them to finish...",
+                            asyncExecutor.getCurrentlyRunning(), asyncExecutor.getUnsubmittedTaskCount(),
+                            drainTimeout, drainTimeoutUnit.name().toLowerCase()));
+                    try {
+                        if (!asyncExecutor.awaitIdle(drainTimeout, drainTimeoutUnit)) {
+                            logger.severe(String.format(
+                                    "Pool reset with %d tasks still running and %d still queued after drain timeout.",
+                                    asyncExecutor.getCurrentlyRunning(), asyncExecutor.getUnsubmittedTaskCount()));
+                        }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        logger.warning("Interrupted while draining; proceeding with pool reset.");
+                    }
+                }
+                setupPool();
+                future.complete(true);
+            } catch (Throwable ex) {
+                future.completeExceptionally(ex);
+            } finally {
+                synchronized (SqlClient.this) {
+                    if (pendingPoolReset == future) pendingPoolReset = null;
+                }
+            }
+        });
+        return future;
+    }
+
+    /**
+     * Fired just before the existing pool is closed during a pool reset (not initial construction).
+     * Subscribers may use this to perform last-chance cleanup on the old connections.
+     * @see #onAfterPoolResetEvent()
+     */
+    public SubscribableEvent<SqlClient> onBeforePoolResetEvent() { return onBeforePoolResetEvent; }
+
+    /**
+     * Fired after the new pool is ready and {@link #afterPoolReset()} has completed.
+     * Subscribers may use this to reinitialize state that depends on an active connection.
+     * @see #onBeforePoolResetEvent()
+     */
+    public SubscribableEvent<SqlClient> onAfterPoolResetEvent() { return onAfterPoolResetEvent; }
+
+    /**
+     * Hook called after the new pool is successfully opened, but before
+     * {@link #onAfterPoolResetEvent()} fires. Subclasses should override this to perform
+     * post-reset work (e.g., running migrations, invalidating repository caches) that must
+     * complete before external subscribers are notified.
+     * <p>Only called on actual pool resets, not during initial pool creation.</p>
+     */
+    protected void afterPoolReset() {}
 
     /** @return The current database configuration object. */
     public @NotNull SqlConnectionConfig getSqlConnectionConfig() {
@@ -124,13 +235,9 @@ public class SqlClient {
      * </ul>
      */
     protected synchronized void setupPool() {
-        if (dataSource != null && !dataSource.isClosed()) {
-            // TODO: wait for running async tasks to finish? Don't want to block main thread for long but
-            //  pulling the rug on running tasks needs some thought.
-            if (asyncExecutor.isBusy()) {
-                logger.severe(String.format("Resetting db connection while %d async tasks are still running and %d are waiting to run!",
-                        asyncExecutor.getCurrentlyRunning(), asyncExecutor.getUnsubmittedTaskCount()));
-            }
+        final boolean isReset = dataSource != null && !dataSource.isClosed();
+        if (isReset) {
+            onBeforePoolResetEvent.accept(this);
             dataSource.close();
         }
         activeDialect = sqlConnectionConfig.dialect();
@@ -162,6 +269,12 @@ public class SqlClient {
             logger.info("Database pool '" + poolName + "' initialized using " + sqlConnectionConfig);
         } catch (Exception e) {
             logger.log(Level.SEVERE, "Failed to initialize database pool!", e);
+            return;
+        }
+
+        if (isReset) {
+            afterPoolReset();
+            onAfterPoolResetEvent.accept(this);
         }
     }
 

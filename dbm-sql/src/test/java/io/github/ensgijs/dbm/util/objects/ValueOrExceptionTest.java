@@ -14,7 +14,7 @@ class ValueOrExceptionTest {
     // ---- forValue ----
 
     @Test
-    void forValue_hasValueAndNoException() throws Exception {
+    void forValue_hasValueAndNoException() {
         ValueOrException<String, Exception> voe = ValueOrException.forValue("hello");
         assertTrue(voe.hasValue());
         assertFalse(voe.hasException());
@@ -24,7 +24,7 @@ class ValueOrExceptionTest {
     }
 
     @Test
-    void forValue_nullValueIsAllowed() throws Exception {
+    void forValue_nullValueIsAllowed() {
         ValueOrException<String, Exception> voe = ValueOrException.forValue(null);
         assertFalse(voe.hasValue(), "null value means hasValue() should be false");
         assertNull(voe.getValue());
@@ -44,17 +44,75 @@ class ValueOrExceptionTest {
     }
 
     @Test
-    void forException_getOrThrow_throwsWrappedException() {
+    void forException_getOrThrow_throwsRetrievalException() {
         IOException ex = new IOException("test error");
         ValueOrException<String, IOException> voe = ValueOrException.forException(ex);
-        IOException thrown = assertThrows(IOException.class, voe::getOrThrow);
-        assertSame(ex, thrown);
+        ValueOrException.RetrievalException thrown = assertThrows(
+                ValueOrException.RetrievalException.class, voe::getOrThrow);
+        assertSame(ex, thrown.getCause());
+    }
+
+    @Test
+    void forException_getOrThrow_isIdempotent() {
+        IOException ex = new IOException("test error");
+        ValueOrException<String, IOException> voe = ValueOrException.forException(ex);
+        for (int i = 0; i < 3; i++) {
+            ValueOrException.RetrievalException thrown = assertThrows(
+                    ValueOrException.RetrievalException.class, voe::getOrThrow);
+            assertSame(ex, thrown.getCause(), "cause must be the original exception on call " + (i + 1));
+        }
+    }
+
+    @Test
+    void retrievalException_unwrap_castsToCause() {
+        IOException ex = new IOException("test error");
+        ValueOrException<String, IOException> voe = ValueOrException.forException(ex);
+        ValueOrException.RetrievalException thrown = assertThrows(
+                ValueOrException.RetrievalException.class, voe::getOrThrow);
+        assertSame(ex, thrown.unwrap(IOException.class));
+    }
+
+    // ---- getOrThrow(Class) ----
+
+    @Test
+    void forValue_getOrThrowClass_returnsValue() throws Exception {
+        ValueOrException<String, IOException> voe = ValueOrException.forValue("hello");
+        assertEquals("hello", voe.getOrThrow(IOException.class));
+    }
+
+    @Test
+    void forException_getOrThrowClass_throwsWrapperWithOriginalAsCause() {
+        IOException original = new IOException("original");
+        ValueOrException<String, IOException> voe = ValueOrException.forException(original);
+        IOException thrown = assertThrows(IOException.class, () -> voe.getOrThrow(IOException.class));
+        assertNotSame(original, thrown, "should be a new wrapper instance, not the original");
+        assertSame(original, thrown.getCause(), "original must be the cause");
+    }
+
+    @Test
+    void forException_getOrThrowClass_isIdempotent() {
+        IOException original = new IOException("original");
+        ValueOrException<String, IOException> voe = ValueOrException.forException(original);
+        for (int i = 0; i < 3; i++) {
+            IOException thrown = assertThrows(IOException.class, () -> voe.getOrThrow(IOException.class));
+            assertSame(original, thrown.getCause(), "cause must be the original on call " + (i + 1));
+        }
+    }
+
+    @Test
+    void forException_getOrThrowClass_noSuitableConstructor_throwsIllegalArgumentException() {
+        // RuntimeException has (String, Throwable) constructor but let's use a class without one
+        class NoGoodCtor extends Exception {
+            NoGoodCtor() { super("no-good"); }
+        }
+        ValueOrException<String, IOException> voe = ValueOrException.forException(new IOException("x"));
+        assertThrows(IllegalArgumentException.class, () -> voe.getOrThrow(NoGoodCtor.class));
     }
 
     // ---- eval ----
 
     @Test
-    void eval_successCapturesToValue() throws Exception {
+    void eval_successCapturesToValue() {
         ValueOrException<Integer, Exception> voe = ValueOrException.eval(() -> 42);
         assertFalse(voe.hasException());
         assertEquals(42, voe.getOrThrow());
@@ -79,7 +137,7 @@ class ValueOrExceptionTest {
     }
 
     @Test
-    void eval_withErrorCallback_doesNotCallCallbackOnSuccess() throws Exception {
+    void eval_withErrorCallback_doesNotCallCallbackOnSuccess() {
         List<Exception> captured = new ArrayList<>();
         ValueOrException<String, Exception> voe = ValueOrException.eval(() -> "ok", captured::add);
         assertEquals("ok", voe.getOrThrow());
@@ -111,7 +169,7 @@ class ValueOrExceptionTest {
     // ---- empty ----
 
     @Test
-    void empty_hasNeitherValueNorException() throws Exception {
+    void empty_hasNeitherValueNorException() {
         ValueOrException<String, Exception> empty = ValueOrException.empty();
         assertFalse(empty.hasValue());
         assertFalse(empty.hasException());

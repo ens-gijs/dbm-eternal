@@ -192,10 +192,25 @@ public record Migration (
         }
 
         if (sorted.size() < lookup.size()) {
-            Map<Key, Migration> missingOrCycled = new HashMap<>(lookup);
-            sorted.forEach(m -> missingOrCycled.remove(m.key));
-            // TODO: improve error message to be more specific and more informative.
-            throw new DatabaseException("Migration sort failed. Possible circular dependency or missing requirement among: " + missingOrCycled.values());
+            Map<Key, Migration> unsorted = new HashMap<>(lookup);
+            sorted.forEach(m -> unsorted.remove(m.key));
+
+            List<String> missingDepsDesc = new ArrayList<>();
+            List<String> circularDesc = new ArrayList<>();
+            for (var m : unsorted.values()) {
+                var missing = m.dependencies().stream().filter(dep -> !lookup.containsKey(dep)).toList();
+                if (!missing.isEmpty()) {
+                    missingDepsDesc.add(m.key() + " requires " + missing);
+                } else {
+                    circularDesc.add(m.key().toString());
+                }
+            }
+            var msg = new StringBuilder("Migration sort failed.");
+            if (!missingDepsDesc.isEmpty())
+                msg.append(" Missing dependencies: ").append(missingDepsDesc).append(".");
+            if (!circularDesc.isEmpty())
+                msg.append(" Possible circular dependency among: ").append(circularDesc).append(".");
+            throw new DatabaseException(msg.toString());
         }
 
         return sorted;

@@ -2,6 +2,7 @@ package io.github.ensgijs.dbm.util.objects;
 
 import io.github.ensgijs.dbm.util.function.ExceptionalFunction;
 import io.github.ensgijs.dbm.util.function.ExceptionalSupplier;
+import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.function.Consumer;
@@ -111,22 +112,87 @@ public class ValueOrException<V, E extends Exception> {
     }
 
     /**
-     * Returns the value if present, otherwise throws the contained exception.
+     * Returns the value if present, otherwise throws a {@link RetrievalException} whose
+     * {@link RetrievalException#getCause() cause} is the original wrapped exception and whose
+     * stack trace reflects the call site of this method.
      * <p>
-     * Note: This method overwrites the exception stack trace with the current execution
-     * point to make debugging easier from the point of retrieval.
+     * When a specific checked exception type must be propagated, prefer
+     * {@link #getOrThrow(Class)} over catching {@link RetrievalException} and calling
+     * {@link RetrievalException#unwrap(Class)}.
      * </p>
-     * @return the value if no exception exists
-     * @throws E the wrapped exception
+     * @return the value if no exception is present
+     * @throws RetrievalException if an exception is present, wrapping the original as cause
      */
-    public V getOrThrow() throws E {
+    public V getOrThrow() {
         if (exception != null) {
-            // TODO: try to leverage exception.addSuppressed() here
-            // Updating stack trace to show where getOrThrow was called
-            exception.setStackTrace(new Exception().getStackTrace());
-            throw exception;
+            throw new RetrievalException(exception);
         }
         return value;
+    }
+
+    /**
+     * Returns the value if present, otherwise constructs and throws a new instance of
+     * {@code wrapperType} with the original exception as its cause.
+     * <p>
+     * This preserves both call stacks: the original exception's stack trace is available via
+     * {@link Throwable#getCause()}, and the thrown wrapper carries a fresh stack trace from
+     * this call site.
+     * </p>
+     * <p>
+     * {@code wrapperType} must expose either a {@code (String, Throwable)} or a
+     * {@code (Throwable)} constructor; if neither is found an {@link IllegalArgumentException}
+     * is thrown immediately.
+     * </p>
+     *
+     * @param wrapperType the exception type to throw when an exception is present
+     * @param <T>         the exception type
+     * @return the value if no exception is present
+     * @throws T                     if an exception is present, wrapped in a new {@code wrapperType} instance
+     * @throws IllegalArgumentException if {@code wrapperType} lacks a suitable constructor
+     */
+    @SuppressWarnings("unchecked")
+    public <T extends Exception> V getOrThrow(@NotNull Class<T> wrapperType) throws T {
+        if (exception == null) return value;
+        try {
+            T wrapper;
+            try {
+                wrapper = wrapperType.getConstructor(String.class, Throwable.class)
+                        .newInstance("ValueOrException retrieval failed", exception);
+            } catch (NoSuchMethodException ignored) {
+                wrapper = wrapperType.getConstructor(Throwable.class).newInstance(exception);
+            }
+            throw wrapper;
+        } catch (NoSuchMethodException nme) {
+            throw new IllegalArgumentException(
+                    wrapperType.getName() + " must have a (String, Throwable) or (Throwable) constructor"
+                    + " to be used with getOrThrow(Class).", nme);
+        } catch (ReflectiveOperationException roe) {
+            // Constructor invocation failed (e.g. InvocationTargetException) — fall back to unchecked.
+            throw new RetrievalException(exception);
+        }
+    }
+
+    /**
+     * Unchecked wrapper thrown by {@link #getOrThrow()} when an exception is present.
+     * The wrapped exception is available via {@link #getCause()} and preserves its original
+     * stack trace. This exception's own stack trace reflects the {@link #getOrThrow()} call site.
+     */
+    public static final class RetrievalException extends RuntimeException {
+        RetrievalException(@NotNull Exception cause) {
+            super("ValueOrException contained an exception", cause);
+        }
+
+        /**
+         * Casts and returns the wrapped cause as the expected type.
+         *
+         * @param type the expected exception type
+         * @param <X>  the expected exception type
+         * @return the cause cast to {@code X}
+         * @throws ClassCastException if the cause is not an instance of {@code type}
+         */
+        public <X extends Exception> X unwrap(@NotNull Class<X> type) {
+            return type.cast(getCause());
+        }
     }
 
     /**

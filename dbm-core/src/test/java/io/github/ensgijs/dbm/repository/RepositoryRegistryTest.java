@@ -386,20 +386,92 @@ public class RepositoryRegistryTest {
     class RepositoryCompositionTest {
 
         @Nested
-        @DisplayName("Flyweight instance is shared across inheritance hierarchy")
-        class FlyweightTests {
+        @DisplayName("Replaceable composition (abstract intermediary) registration and lookup")
+        class ReplaceableCompositionTests {
 
             @Test
-            void testFlyweightIdentityAcrossHierarchy() {
-                registry.registerComposition(EnhancedLogic.class);
-                registry.closeRegistration();
+            @DisplayName("Single competitor: abstract key returns instance, concrete key throws")
+            void testSingleCompetitorAbstractKeyWins() throws Exception {
+                registry.registerComposition(BaseLogicImpl.class);
+                registry.closeRegistration(null, null).get(1, TimeUnit.SECONDS);
 
-                EnhancedLogic enhanced = registry.getCompositeRepository(EnhancedLogic.class);
-                BaseLogic base = registry.getCompositeRepository(BaseLogic.class);
+                AbstractBaseLogic instance = registry.getCompositeRepository(AbstractBaseLogic.class);
+                assertNotNull(instance);
+                assertInstanceOf(BaseLogicImpl.class, instance);
 
-                assertNotNull(enhanced);
-                assertSame(enhanced, base);
-                assertInstanceOf(EnhancedLogic.class, base);
+                assertThrows(RepositoryInitializationException.class,
+                        () -> registry.getCompositeRepository(BaseLogicImpl.class));
+            }
+
+            @Test
+            @DisplayName("Two competitors + conflict resolver: correct winner returned for abstract key")
+            void testTwoCompetitorsWithResolver() throws Exception {
+                registry.registerComposition(BaseLogicImpl.class);
+                registry.registerComposition(EnhancedLogicImpl.class);
+                registry.closeRegistration(null, (abstractKey, competitors) -> EnhancedLogicImpl.class)
+                        .get(1, TimeUnit.SECONDS);
+
+                AbstractBaseLogic instance = registry.getCompositeRepository(AbstractBaseLogic.class);
+                assertNotNull(instance);
+                assertInstanceOf(EnhancedLogicImpl.class, instance);
+            }
+
+            @Test
+            @DisplayName("Two competitors + no resolver: closeRegistration future completes exceptionally")
+            void testTwoCompetitorsNoResolverThrows() throws Exception {
+                registry.registerComposition(BaseLogicImpl.class);
+                registry.registerComposition(EnhancedLogicImpl.class);
+
+                var future = registry.closeRegistration(null, null);
+                assertThrows(ExecutionException.class, () -> future.get(1, TimeUnit.SECONDS));
+            }
+
+            @Test
+            @DisplayName("Registering a concrete that extends a concrete composition throws IllegalArgumentException")
+            void testExtendingConcreteCompositionThrows() {
+                assertThrows(IllegalArgumentException.class,
+                        () -> registry.registerComposition(DirectLogicSubclass.class));
+            }
+
+            @Test
+            @DisplayName("Registering a concrete with chain deeper than one abstract throws IllegalArgumentException")
+            void testDeepAbstractChainThrows() {
+                assertThrows(IllegalArgumentException.class,
+                        () -> registry.registerComposition(DeepChainImpl.class));
+            }
+        }
+
+        @Nested
+        @DisplayName("getCompositeRepository(Class, fallbackCreator)")
+        class FallbackCreatorTests {
+
+            @Test
+            @DisplayName("No registration: fallback creator is used")
+            void testFallbackCreatorUsedWhenNotRegistered() throws Exception {
+                registry.closeRegistration().get(1, TimeUnit.SECONDS);
+
+                DirectLogic custom = new DirectLogic() {
+                    @Override public String toString() { return "FallbackInstance"; }
+                };
+                DirectLogic result = registry.getCompositeRepository(DirectLogic.class, reg -> custom);
+                assertSame(custom, result);
+            }
+
+            @Test
+            @DisplayName("With registration: registered creator wins over fallback")
+            void testRegisteredCreatorWinsOverFallback() throws Exception {
+                DirectLogic registered = new DirectLogic() {
+                    @Override public String toString() { return "RegisteredInstance"; }
+                };
+                registry.registerComposition(DirectLogic.class, reg -> registered);
+                registry.closeRegistration().get(1, TimeUnit.SECONDS);
+
+                DirectLogic fallback = new DirectLogic() {
+                    @Override public String toString() { return "FallbackInstance"; }
+                };
+                DirectLogic result = registry.getCompositeRepository(DirectLogic.class, reg -> fallback);
+                assertSame(registered, result);
+                assertEquals("RegisteredInstance", result.toString());
             }
         }
 
@@ -476,8 +548,23 @@ public class RepositoryRegistryTest {
 
         // --- Test composition dummies ---
 
+        // For direct (non-replaceable) tests — directly implements RC
+        public static class DirectLogic implements RepositoryComposition {}
+
+        // Subclass of a concrete composition — illegal (used in rejection tests)
+        public static class DirectLogicSubclass extends DirectLogic {}
+
+        // For replaceable tests — abstract intermediary pattern
+        public abstract static class AbstractBaseLogic implements RepositoryComposition {}
+        public static class BaseLogicImpl extends AbstractBaseLogic {}
+        public static class EnhancedLogicImpl extends AbstractBaseLogic {}
+
+        // Deep chain — two abstract levels — illegal (used in rejection tests)
+        public abstract static class AbstractMidLevel extends AbstractBaseLogic {}
+        public static class DeepChainImpl extends AbstractMidLevel {}
+
+        // For testCustomCreator — directly implements RC (unchanged)
         public static class BaseLogic implements RepositoryComposition {}
-        public static class EnhancedLogic extends BaseLogic {}
 
         public static class HeavyLogic implements RepositoryComposition {
             static final AtomicInteger instantiationCount = new AtomicInteger();

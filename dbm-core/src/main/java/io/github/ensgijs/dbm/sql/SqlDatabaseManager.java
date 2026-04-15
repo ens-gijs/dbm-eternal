@@ -68,34 +68,35 @@ public class SqlDatabaseManager extends SqlClient {
         this.migrator = migrator != null ? migrator : new SchemaMigrator(this);
     }
 
+    /**
+     * Runs any pending migrations for each cached repository, then invalidates their caches.
+     * Called automatically by {@link SqlClient#setupPool()} on pool resets (not initial construction),
+     * before {@link SqlClient#onAfterPoolResetEvent()} fires so that all schema work is complete
+     * by the time external subscribers are notified.
+     */
     @Override
-    public boolean setSqlConnectionConfig(@NotNull SqlConnectionConfig config) {
-        final boolean connectionChanged = super.setSqlConnectionConfig(config);
-        if (connectionChanged && migrator != null /*true during instance creation*/) {
-            migrator.refreshVersionCache();
+    protected void afterPoolReset() {
+        migrator.refreshVersionCache();
 
-            // Re-run migrations and invalidate caches for any cached repositories
-            Iterator<Map.Entry<Class<? extends Repository>, ValueOrException<Repository, DatabaseException>>>
-                    iter = repositoryCache.entrySet().iterator();
-            while (iter.hasNext()) {
-                var e = iter.next();
-                var voe = e.getValue();
-                try {
-                    if (voe.hasValue()) {
-                        migrator.runMigrationsFor(e.getKey());
-                        voe.getValue().invalidateCaches();
-                    } else {
-                        // Release previously captured errors to lazily allow re-bootstrapping
-                        iter.remove();
-                    }
-                } catch (Exception ex) {
-                    logger.log(Level.SEVERE, "Error while applying required migrations for repository: "
-                            + voe.getValue().getClass().getName(), ex);
+        Iterator<Map.Entry<Class<? extends Repository>, ValueOrException<Repository, DatabaseException>>>
+                iter = repositoryCache.entrySet().iterator();
+        while (iter.hasNext()) {
+            var e = iter.next();
+            var voe = e.getValue();
+            try {
+                if (voe.hasValue()) {
+                    migrator.runMigrationsFor(e.getKey());
+                    voe.getValue().invalidateCaches();
+                } else {
+                    // Release previously captured errors to lazily allow re-bootstrapping
                     iter.remove();
                 }
+            } catch (Exception ex) {
+                logger.log(Level.SEVERE, "Error while applying required migrations for repository: "
+                        + voe.getValue().getClass().getName(), ex);
+                iter.remove();
             }
         }
-        return connectionChanged;
     }
 
     /**
@@ -125,7 +126,7 @@ public class SqlDatabaseManager extends SqlClient {
     ) throws RepositoryInitializationException {
         var voe = repositoryCache.get(api);
         if (voe != null) {
-            I instance = (I) voe.getOrThrow();
+            I instance = (I) voe.getOrThrow(RepositoryInitializationException.class);
             if (!implClass.isInstance(instance)) {
                 throw new RepositoryInitializationException(
                         "Cache collision for api " + api.getName()
@@ -149,7 +150,7 @@ public class SqlDatabaseManager extends SqlClient {
         }
 
         repositoryCache.put(api, voe);
-        return (I) voe.getOrThrow();
+        return (I) voe.getOrThrow(RepositoryInitializationException.class);
     }
 
     /**

@@ -129,7 +129,7 @@ public final class MigrationLoader {
     public static @NotNull List<Migration> loadMigrations(@NotNull PlatformHandle platformHandle, final @NotNull ClassLoader classLoader) throws MigrationParseException {
         final String handleName = platformHandle.name();
         if (cache.containsKey(handleName)) {
-            return cache.get(handleName).getOrThrow();
+            return cache.get(handleName).getOrThrow(MigrationParseException.class);
         }
 
         List<Migration> discovered = new ArrayList<>();

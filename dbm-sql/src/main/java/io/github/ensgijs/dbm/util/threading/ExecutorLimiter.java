@@ -240,6 +240,29 @@ public class ExecutorLimiter extends AbstractExecutorService {
         return state >= TERMINATED;
     }
 
+    /**
+     * Blocks until no tasks are actively running or waiting to be submitted, or until the
+     * timeout elapses. Does <em>not</em> shut down the executor.
+     *
+     * @param timeout maximum time to wait
+     * @param unit    time unit of the timeout
+     * @return {@code true} if the executor became idle within the timeout; {@code false} if the
+     *         timeout elapsed while tasks were still in-flight
+     * @throws InterruptedException if the current thread is interrupted while waiting
+     */
+    public boolean awaitIdle(long timeout, @NotNull TimeUnit unit) throws InterruptedException {
+        // Standard j.u.c. deadline pattern. System.nanoTime() is monotonically non-decreasing
+        // within a JVM process, starting near zero (system-boot origin), so overflow is not
+        // a practical concern for any realistic timeout value.
+        final long deadline = System.nanoTime() + unit.toNanos(timeout);
+        while (isBusy()) {
+            long remainingNanos = deadline - System.nanoTime();
+            if (remainingNanos <= 0) return false;
+            Thread.sleep(Math.min(50L, Math.max(1L, TimeUnit.NANOSECONDS.toMillis(remainingNanos))));
+        }
+        return true;
+    }
+
     @Override
     public boolean awaitTermination(long timeout, @NotNull TimeUnit unit) throws InterruptedException {
         Objects.requireNonNull(unit);
