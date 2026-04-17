@@ -44,11 +44,12 @@ import java.util.stream.Collectors;
  *     register {@link SqlDatabaseManager} providers and
  *     {@link RegistrationBootstrappingContext#registerComposition} to register
  *     {@link RepositoryComposition} aggregators.</li>
- * <li><b>Ready phase</b> – call {@link #closeRegistration()} (or the overload accepting a
- *     {@code conflictResolver}) after everyone has had a chance to
- *     {@link #register(PlatformHandle, ClassLoader)}.  Provider conflicts from {@link PublishMode#CONTEST CONTEST}
- *     publications are resolved, then {@link RegistrationHelper#onReady(ThrowingConsumer)} callbacks
- *     are invoked, after which the registry is fully operational.</li>
+ * <li><b>Ready phase</b> – call {@link #closeRegistration()} (or the overload accepting
+ *     {@link RegistrationOptions}) after everyone has had a chance to
+ *     {@link #register(PlatformHandle, ClassLoader)}.  Provider conflicts from
+ *     {@link ConflictMode#CONTEST CONTEST} publications are resolved, then
+ *     {@link RegistrationHelper#onReady(ThrowingConsumer)} callbacks are invoked, after which the
+ *     registry is fully operational.</li>
  * </ol>
  *
  * <h2>Accessing repositories after registration</h2>
@@ -75,8 +76,13 @@ public final class RepositoryRegistry {
     private volatile boolean registrationClosed = false;
     private Queue<RegistrationHelper> pendingRegistrations = new ConcurrentLinkedQueue<>();
 
-    /// api class → impl class (populated from {@code db/registry/} resource files during scan)
+    /// api class → impl class.
+    /// Pre-close: only holds EXCLUSIVE programmatic bindings (for early introspection).
+    /// Post-close: holds all resolved winners (populated during closeRegistration).
     private final Map<Class<? extends Repository>, Class<? extends Repository>> implBindings = new HashMap<>();
+
+    /// All binding candidates: api → ordered list of candidates (resource-file SUGGEST + programmatic)
+    private final Map<Class<? extends Repository>, List<BindingEntry>> bindingCandidates = new LinkedHashMap<>();
 
     /// api class → list of ProviderEntries (populated via {@link #publish} during onConfigure)
     private final Map<Class<? extends Repository>, List<ProviderEntry>> contestantProviders = new LinkedHashMap<>();
@@ -175,21 +181,31 @@ public final class RepositoryRegistry {
     // -----------------------------------------------------------------------
 
     /**
-     * Defines whether a {@link #publish} call may be contested by another caller.
+     * Controls how a registration competes when multiple candidates exist for the same slot.
+     * <p>
+     * Used for provider publication ({@link #publish}), impl binding ({@link #bindImpl}),
+     * and replaceable composition registration ({@link #registerComposition}).
+     * </p>
      */
-    public enum PublishMode {
+    public enum ConflictMode {
         /**
-         * Only one provider may claim this api. A second {@code publish} for the same api throws
-         * {@link RepositoryInitializationException} immediately.
+         * Implicit for resource-file binding declarations. Automatically yields to
+         * {@link #CONTEST} or {@link #EXCLUSIVE} entries; only enters conflict resolution
+         * when all remaining candidates are also {@code SUGGEST}.
          */
-        EXCLUSIVE,
+        SUGGEST,
         /**
-         * Multiple providers may contest for this api. The winner is determined by the
-         * {@code conflictResolver} passed to {@link #closeRegistration(ThrowingBiFunction)}.
-         * If {@code closeRegistration()} is called without a resolver and a contest exists,
-         * it completes exceptionally.
+         * Explicit competition. Automatically yields to {@link #EXCLUSIVE} entries; only 
+         * enters conflict resolution when all remaining candidates are also {@code CONTEST}.
          */
-        CONTEST
+        CONTEST,
+        /**
+         * Only one registration allowed. A second {@code EXCLUSIVE} for the same slot throws
+         * {@link RepositoryInitializationException} immediately at registration time.
+         * {@code EXCLUSIVE} displaces any {@code SUGGEST} or {@code CONTEST} candidates silently
+         * (with a warning logged for displaced {@code CONTEST} entries).
+         */
+        EXCLUSIVE
     }
 
     /**
@@ -208,18 +224,33 @@ public final class RepositoryRegistry {
             @NotNull Class<? extends RepositoryComposition> concreteType,
             @Nullable PlatformHandle registeredBy) {}
 
+    /**
+     * Carries an impl-binding candidate and the platform handle that registered it.
+     * Passed to the binding conflict resolver in {@link RegistrationOptions}.
+     */
+    public record BindingCandidate(
+            @NotNull Class<? extends Repository> implClass,
+            @NotNull ConflictMode mode,
+            @Nullable PlatformHandle registeredBy) {}
+
     private record ProviderEntry(
             @NotNull SqlDatabaseManager manager,
-            @NotNull PublishMode mode,
+            @NotNull ConflictMode mode,
             @Nullable PlatformHandle registeredBy) {}
 
     private record CompositionContestEntry(
             Class<? extends RepositoryComposition> concreteType,
             ThrowingFunction<RepositoryRegistry, ? extends RepositoryComposition> creator,
+            @NotNull ConflictMode mode,
+            @Nullable PlatformHandle registeredBy) {}
+
+    private record BindingEntry(
+            @NotNull Class<? extends Repository> implClass,
+            @NotNull ConflictMode mode,
             @Nullable PlatformHandle registeredBy) {}
 
     /**
-     * Registers {@code manager} as the exclusive provider for {@code api}.
+     * Registers {@code manager} as the {@link ConflictMode#EXCLUSIVE EXCLUSIVE} provider for {@code api}.
      * <p>Must be called from an {@link RegistrationHelper#onConfigure} callback.</p>
      *
      * @throws RepositoryInitializationException If another provider has already been published for this api.
@@ -230,14 +261,14 @@ public final class RepositoryRegistry {
             @NotNull Class<T> api,
             @NotNull SqlDatabaseManager manager
     ) throws RepositoryInitializationException {
-        publishInternal(api, manager, PublishMode.EXCLUSIVE, manager.getPlatformHandle());
+        publishInternal(api, manager, ConflictMode.EXCLUSIVE, manager.getPlatformHandle());
     }
 
     /**
      * Registers {@code manager} as a provider for {@code api} with the specified {@code mode}.
      * <p>Must be called from an {@link RegistrationHelper#onConfigure} callback.</p>
      *
-     * @throws RepositoryInitializationException If {@code mode} is {@link PublishMode#EXCLUSIVE} and another
+     * @throws RepositoryInitializationException If {@code mode} is {@link ConflictMode#EXCLUSIVE EXCLUSIVE} and another
      *                                           provider has already been published for this api, or if the
      *                                           existing publication was {@code EXCLUSIVE}.
      * @throws IllegalStateException             If registration has already been closed.
@@ -246,7 +277,7 @@ public final class RepositoryRegistry {
     synchronized <T extends Repository> void publish(
             @NotNull Class<T> api,
             @NotNull SqlDatabaseManager manager,
-            @NotNull PublishMode mode
+            @NotNull ConflictMode mode
     ) throws RepositoryInitializationException {
         publishInternal(api, manager, mode, manager.getPlatformHandle());
     }
@@ -254,36 +285,85 @@ public final class RepositoryRegistry {
     private synchronized <T extends Repository> void publishInternal(
             @NotNull Class<T> api,
             @NotNull SqlDatabaseManager manager,
-            @NotNull PublishMode mode,
+            @NotNull ConflictMode mode,
             @Nullable PlatformHandle registeredBy) throws RepositoryInitializationException {
         if (registrationClosed) throw new IllegalStateException("Registration is closed!");
         Repository.validateRepositoryApi(api);  // throws if invalid
 
         var list = contestantProviders.computeIfAbsent(api, k -> new ArrayList<>());
-        if (!list.isEmpty()) {
-            var existing = list.getFirst();
-            if (mode == PublishMode.EXCLUSIVE || existing.mode() == PublishMode.EXCLUSIVE) {
-                throw new RepositoryInitializationException(
-                        "Exclusive publish conflict for " + api.getName()
-                                + ": already published by " + existing.manager().getSqlConnectionConfig().connectionId());
-            }
+
+        // If an EXCLUSIVE already holds this slot nothing more can be added.
+        var existingExclusive = list.stream().filter(e -> e.mode() == ConflictMode.EXCLUSIVE).findFirst();
+        if (existingExclusive.isPresent()) {
+            throw new RepositoryInitializationException(
+                    "Exclusive publish conflict for " + api.getName()
+                            + ": already published exclusively by "
+                            + existingExclusive.get().manager().getSqlConnectionConfig().connectionId());
         }
+
+        // EXCLUSIVE displaces SUGGEST entries at close time, but cannot coexist with CONTEST.
+        if (mode == ConflictMode.EXCLUSIVE && list.stream().anyMatch(e -> e.mode() == ConflictMode.CONTEST)) {
+            throw new RepositoryInitializationException(
+                    "Exclusive publish conflict for " + api.getName()
+                            + ": cannot publish EXCLUSIVE when CONTEST publication(s) already exist.");
+        }
+
         list.add(new ProviderEntry(manager, mode, registeredBy));
     }
 
     /**
-     * Programmatically overrides the impl binding for {@code api}, replacing any resource-file
-     * declaration.  Silently replaces any existing binding.  Must be called before {@link #closeRegistration()}.
+     * Programmatically binds {@code implClass} as the {@link ConflictMode#EXCLUSIVE EXCLUSIVE}
+     * provider for {@code api}. Throws if another EXCLUSIVE binding already exists for this api.
+     * Silently displaces any prior {@link ConflictMode#SUGGEST SUGGEST} entries.
      *
-     * @throws IllegalStateException If registration has already been closed.
+     * @throws RepositoryInitializationException If another EXCLUSIVE binding already exists.
+     * @throws IllegalStateException             If registration has already been closed.
      */
     public synchronized <T extends Repository> void bindImpl(
             @NotNull Class<T> api,
             @NotNull Class<? extends T> implClass
-    ) {
+    ) throws RepositoryInitializationException {
+        bindImplInternal(api, implClass, ConflictMode.EXCLUSIVE, null);
+    }
+
+    /**
+     * Programmatically binds {@code implClass} as a provider for {@code api} with the given mode.
+     *
+     * @throws RepositoryInitializationException If {@code mode} is {@link ConflictMode#EXCLUSIVE} and
+     *                                           another EXCLUSIVE binding already exists for this api.
+     * @throws IllegalStateException             If registration has already been closed.
+     */
+    public synchronized <T extends Repository> void bindImpl(
+            @NotNull Class<T> api,
+            @NotNull Class<? extends T> implClass,
+            @NotNull ConflictMode mode
+    ) throws RepositoryInitializationException {
+        bindImplInternal(api, implClass, mode, null);
+    }
+
+    private synchronized <T extends Repository> void bindImplInternal(
+            @NotNull Class<T> api,
+            @NotNull Class<? extends T> implClass,
+            @NotNull ConflictMode mode,
+            @Nullable PlatformHandle registeredBy
+    ) throws RepositoryInitializationException {
         if (registrationClosed) throw new IllegalStateException("Registration is closed!");
-        Repository.validateRepositoryApi(api);  // throws if invalid
-        implBindings.put(api, implClass);
+        Repository.validateRepositoryApi(api);
+        var list = bindingCandidates.computeIfAbsent(api, k -> new ArrayList<>());
+        if (mode == ConflictMode.EXCLUSIVE) {
+            var existingExclusive = list.stream()
+                    .filter(e -> e.mode() == ConflictMode.EXCLUSIVE)
+                    .findFirst();
+            if (existingExclusive.isPresent()) {
+                throw new RepositoryInitializationException(
+                        "Exclusive binding conflict for " + api.getName()
+                                + ": already bound to " + existingExclusive.get().implClass().getName()
+                                + ", cannot also bind to " + implClass.getName() + ".");
+            }
+            // EXCLUSIVE immediately updates implBindings for pre-close introspection
+            implBindings.put(api, implClass);
+        }
+        list.add(new BindingEntry(implClass, mode, registeredBy));
     }
 
     // -----------------------------------------------------------------------
@@ -403,68 +483,45 @@ public final class RepositoryRegistry {
     }
 
     /**
-     * Closes registration and runs lifecycle callbacks.  Equivalent to
-     * {@link #closeRegistration(ThrowingBiFunction) closeRegistration(null)}.
-     * <p>
-     * If any {@link PublishMode#CONTEST CONTEST} conflicts exist and no resolver was supplied,
-     * the returned future completes exceptionally.
-     * </p>
+     * Closes registration and runs lifecycle callbacks. No conflict resolvers are active;
+     * any unresolved conflict causes the returned future to complete exceptionally.
+     * Equivalent to {@link #closeRegistration(RegistrationOptions) closeRegistration(RegistrationOptions.empty())}.
      */
     public CompletableFuture<Boolean> closeRegistration() {
-        return closeRegistration(null, null);
+        return closeRegistration(RegistrationOptions.empty());
     }
 
     /**
-     * Closes registration, resolves contested providers, and runs lifecycle callbacks.
-     * Equivalent to {@link #closeRegistration(ThrowingBiFunction, ThrowingBiFunction)
-     * closeRegistration(conflictResolver, null)}.
+     * Closes registration, resolves conflicts, and runs lifecycle callbacks.
      *
-     * @param conflictResolver Called for each contested provider api with the list of provider candidates.
-     *                         May be {@code null} if no provider contests are expected.
-     * @return A future that resolves to {@code true} on the first successful close, {@code false}
-     *         on any subsequent call, or completes exceptionally on error.
-     */
-    public synchronized CompletableFuture<Boolean> closeRegistration(
-            @Nullable ThrowingBiFunction<Class<? extends Repository>, List<ProviderCandidate>, SqlDatabaseManager> conflictResolver
-    ) {
-        return closeRegistration(conflictResolver, null);
-    }
-
-    /**
-     * Closes registration, resolves contested providers and composition contests, and runs lifecycle callbacks.
-     * Performs best-effort completeness, if any phase fails for any registrant no further
-     * phases for that registrant will be executed. However, execution of other registrants
-     * will proceed.
-     *
-     * <p>
-     * Steps:
+     * <p>Steps:
      * <ol>
-     * <li>Marks registration as closed (returns {@code false} future if already closed).</li>
-     * <li>Runs all {@link RegistrationHelper#onConfigure} callbacks in dependency order on a
-     *     virtual thread.</li>
-     * <li>Resolves contested providers using {@code conflictResolver}; if there are unresolved
-     *     contests and no resolver was supplied the future completes exceptionally.</li>
-     * <li>Resolves composition contests using {@code compositionConflictResolver}; merges direct
-     *     registrations and contest winners into the resolved composition creator map.</li>
-     * <li>Runs all {@link RegistrationHelper#onReady} callbacks in dependency order.</li>
+     * <li>Marks registration closed (returns {@code false} future if already closed).</li>
+     * <li><b>Phase 1</b> — Runs all {@link RegistrationHelper#onConfigure} callbacks in dependency order.
+     *     Any handle whose callback throws is <em>blackmarked</em>: all of its in-progress registrations
+     *     are purged before the resolution phases begin. By default the error is fatal; set
+     *     {@link RegistrationOptions#continueOnConfigureError(boolean) continueOnConfigureError(true)}
+     *     to demote it to a warning.</li>
+     * <li><b>Phase 2a</b> — Resolves contested provider slots. {@link ConflictMode#SUGGEST SUGGEST} yields
+     *     automatically to {@link ConflictMode#CONTEST CONTEST}; multiple same-mode entries go to the
+     *     {@link RegistrationOptions#providerResolver(ThrowingBiFunction) providerResolver}.</li>
+     * <li><b>Phase 2b</b> — Resolves contested composition slots with the same SUGGEST-yields logic.</li>
+     * <li><b>Phase 2c</b> — Resolves impl-binding conflicts: {@link ConflictMode#EXCLUSIVE EXCLUSIVE} always
+     *     wins (displacing {@link ConflictMode#SUGGEST SUGGEST} silently and {@link ConflictMode#CONTEST CONTEST}
+     *     with a warning); {@link ConflictMode#SUGGEST SUGGEST} yields to {@link ConflictMode#CONTEST CONTEST};
+     *     multiple same-mode entries go to the
+     *     {@link RegistrationOptions#bindingResolver(ThrowingBiFunction) bindingResolver}.</li>
+     * <li><b>Phase 3</b> — Runs all {@link RegistrationHelper#onReady} callbacks in dependency order.</li>
      * </ol>
      *
-     * @param conflictResolver Called for each contested provider api with the list of provider candidates.
-     *                         Must return a non-null winner from that list, or {@code null} to
-     *                         reject all (which causes the future to complete exceptionally).
-     *                         May be {@code null} if no provider contests are expected.
-     * @param compositionConflictResolver Called for each contested composition abstract key with the list
-     *                         of competing composition candidates. Must return a non-null winner from that list,
-     *                         or {@code null} to reject all (which causes the future to complete exceptionally).
-     *                         May be {@code null} if no composition contests are expected.
+     * @param options Resolvers and options for conflict resolution. Use {@link RegistrationOptions#withDefaults()}
+     *                to apply the dependency-order defaults, or {@link RegistrationOptions#empty()} if no
+     *                conflicts are expected.
      * @return A future that resolves to {@code true} on the first successful close, {@code false}
      *         on any subsequent call, or completes exceptionally on error.
      */
     @VisibleForTesting
-    public synchronized CompletableFuture<Boolean> closeRegistration(
-            @Nullable ThrowingBiFunction<Class<? extends Repository>, List<ProviderCandidate>, SqlDatabaseManager> conflictResolver,
-            @Nullable ThrowingBiFunction<Class<? extends RepositoryComposition>, List<CompositionCandidate>, Class<? extends RepositoryComposition>> compositionConflictResolver
-    ) {
+    public synchronized CompletableFuture<Boolean> closeRegistration(@NotNull RegistrationOptions options) {
         if (registrationClosed) return CompletableFuture.completedFuture(false);
         registrationClosed = true;
 
@@ -477,6 +534,7 @@ public final class RepositoryRegistry {
             RepositoryInitializationException err = null;
 
             // Phase 1: onConfigure (dependency order, already sorted)
+            Set<PlatformHandle> blackmarkedHandles = new HashSet<>();
             var iter = registrations.listIterator();
             while (iter.hasNext()) {
                 var r = iter.next();
@@ -485,43 +543,69 @@ public final class RepositoryRegistry {
                     try {
                         r.onConfigure.accept(new RegistrationBootstrappingContext(this, r.platformHandle));
                     } catch (Throwable ex) {
-                        if (err == null) err = new RepositoryInitializationException("Error in onConfigure.");
+                        blackmarkedHandles.add(r.platformHandle);
+                        if (err == null) err = new RepositoryInitializationException(
+                                "Error in onConfigure for '" + r.platformHandle.name() + "'.");
                         err.addSuppressed(ex);
                         iter.remove(); // exclude from onReady since configure failed
                     }
                 }
             }
 
-            // Phase 1.5: Resolve contested providers
+            // Purge all registrations made by errored handles; their configurations are incomplete
+            // and partial state may be dangerous.
+            if (!blackmarkedHandles.isEmpty()) {
+                contestantProviders.forEach((api, list) -> list.removeIf(e -> blackmarkedHandles.contains(e.registeredBy())));
+                bindingCandidates.forEach((api, list) -> list.removeIf(e -> blackmarkedHandles.contains(e.registeredBy())));
+                compositionContests.forEach((key, list) -> list.removeIf(e -> blackmarkedHandles.contains(e.registeredBy())));
+                // Note: directCompositionCreators does not track registeredBy; entries from errored handles cannot be purged.
+                if (options.continueOnConfigureError) {
+                    // Non-fatal: log a warning and clear the error so the future can still complete successfully.
+                    Logger.getLogger("RepositoryRegistry").warning(
+                            blackmarkedHandles.size() + " platform handle(s) failed onConfigure and their registrations "
+                                    + "were discarded: "
+                                    + blackmarkedHandles.stream().map(PlatformHandle::name).collect(Collectors.joining(", ")));
+                    err = null;
+                }
+            }
+
+            // Phase 2a: Resolve contested providers
             Map<Class<? extends Repository>, SqlDatabaseManager> resolved = new HashMap<>();
             for (var entry : contestantProviders.entrySet()) {
                 var contestants = entry.getValue();
                 if (contestants.size() == 1) {
                     resolved.put(entry.getKey(), contestants.getFirst().manager());
                 } else {
-                    // Multiple CONTEST entries — need conflict resolution
-                    if (conflictResolver == null) {
+                    // SUGGEST yields to CONTEST or EXCLUSIVE automatically.
+                    var explicit = contestants.stream()
+                            .filter(e -> e.mode() != ConflictMode.SUGGEST)
+                            .toList();
+                    var toResolve = explicit.isEmpty() ? contestants : explicit;
+
+                    if (toResolve.size() == 1) {
+                        resolved.put(entry.getKey(), toResolve.getFirst().manager());
+                    } else if (options.providerResolver == null) {
                         var e = new RepositoryInitializationException(
-                                "Contest conflict for " + entry.getKey().getName()
-                                        + " but no conflictResolver was provided to closeRegistration().");
+                                "Provider contest conflict for " + entry.getKey().getName()
+                                        + " but no providerResolver was provided in RegistrationOptions.");
                         if (err == null) err = e; else err.addSuppressed(e);
                     } else {
-                        var candidates = contestants.stream()
+                        var candidates = toResolve.stream()
                                 .map(e -> new ProviderCandidate(e.manager(), e.registeredBy()))
                                 .toList();
                         try {
-                            SqlDatabaseManager winner = conflictResolver.apply(entry.getKey(), candidates);
+                            SqlDatabaseManager winner = options.providerResolver.apply(entry.getKey(), candidates);
                             var managers = candidates.stream().map(ProviderCandidate::manager).toList();
                             if (winner == null || !managers.contains(winner)) {
                                 var e = new RepositoryInitializationException(
-                                        "conflictResolver returned an invalid winner for " + entry.getKey().getName());
+                                        "providerResolver returned an invalid winner for " + entry.getKey().getName());
                                 if (err == null) err = e; else err.addSuppressed(e);
                             } else {
                                 resolved.put(entry.getKey(), winner);
                             }
                         } catch (Throwable ex) {
                             var e = new RepositoryInitializationException(
-                                    "conflictResolver threw for " + entry.getKey().getName(), ex);
+                                    "providerResolver threw for " + entry.getKey().getName(), ex);
                             if (err == null) err = e; else err.addSuppressed(e);
                         }
                     }
@@ -529,7 +613,7 @@ public final class RepositoryRegistry {
             }
             resolvedProviders = Collections.unmodifiableMap(resolved);
 
-            // Phase 1.75: Resolve composition contests and build resolved creator map
+            // Phase 2b: Resolve composition contests and build resolved creator map
             Map<Class<? extends RepositoryComposition>, ThrowingFunction<RepositoryRegistry, ? extends RepositoryComposition>> resolvedCreators = new HashMap<>();
 
             // Merge direct (non-replaceable) registrations
@@ -543,39 +627,44 @@ public final class RepositoryRegistry {
                 if (contestants.size() == 1) {
                     resolvedCreators.put(abstractKey, contestants.getFirst().creator());
                 } else {
-                    // Multiple competitors — need conflict resolution
-                    if (compositionConflictResolver == null) {
-                        var concreteNames = contestants.stream()
+                    // Filter out SUGGEST if any CONTEST exists
+                    var explicitContests = contestants.stream()
+                            .filter(c -> c.mode() == ConflictMode.CONTEST)
+                            .toList();
+                    var toResolve = explicitContests.isEmpty() ? contestants : explicitContests;
+
+                    if (toResolve.size() == 1) {
+                        resolvedCreators.put(abstractKey, toResolve.getFirst().creator());
+                    } else if (options.compositionResolver == null) {
+                        var concreteNames = toResolve.stream()
                                 .map(c -> c.concreteType().getName())
                                 .collect(Collectors.joining(", "));
                         var e = new RepositoryInitializationException(
                                 "Composition contest conflict for " + abstractKey.getName()
                                         + " (competitors: " + concreteNames + ")"
-                                        + " but no compositionConflictResolver was provided to closeRegistration().");
+                                        + " but no compositionResolver was provided in RegistrationOptions.");
                         if (err == null) err = e; else err.addSuppressed(e);
                     } else {
-                        var candidateList = contestants.stream()
+                        var candidateList = toResolve.stream()
                                 .map(c -> new CompositionCandidate(c.concreteType(), c.registeredBy()))
                                 .toList();
                         var concreteTypes = candidateList.stream().map(CompositionCandidate::concreteType).toList();
                         try {
                             Class<? extends RepositoryComposition> winnerType =
-                                    compositionConflictResolver.apply(abstractKey, candidateList);
+                                    options.compositionResolver.apply(abstractKey, candidateList);
                             if (winnerType == null || !concreteTypes.contains(winnerType)) {
                                 var e = new RepositoryInitializationException(
-                                        "compositionConflictResolver returned an invalid winner for " + abstractKey.getName());
+                                        "compositionResolver returned an invalid winner for " + abstractKey.getName());
                                 if (err == null) err = e; else err.addSuppressed(e);
                             } else {
-                                var winnerCreator = contestants.stream()
+                                var winnerCreator = toResolve.stream()
                                         .filter(c -> c.concreteType() == winnerType)
-                                        .findFirst()
-                                        .orElseThrow()
-                                        .creator();
+                                        .findFirst().orElseThrow().creator();
                                 resolvedCreators.put(abstractKey, winnerCreator);
                             }
                         } catch (Throwable ex) {
                             var e = new RepositoryInitializationException(
-                                    "compositionConflictResolver threw for " + abstractKey.getName(), ex);
+                                    "compositionResolver threw for " + abstractKey.getName(), ex);
                             if (err == null) err = e; else err.addSuppressed(e);
                         }
                     }
@@ -584,12 +673,76 @@ public final class RepositoryRegistry {
 
             resolvedCompositionCreators = Collections.unmodifiableMap(resolvedCreators);
 
-            // Phase 2: onReady
+            // Phase 2c: Resolve impl binding conflicts
+            for (var entry : bindingCandidates.entrySet()) {
+                var api = entry.getKey();
+                var candidates = entry.getValue();
+
+                // Check for EXCLUSIVE (at most one; enforced at add time)
+                var exclusives = candidates.stream()
+                        .filter(e -> e.mode() == ConflictMode.EXCLUSIVE).toList();
+                if (!exclusives.isEmpty()) {
+                    // EXCLUSIVE wins; implBindings was already set at bindImpl call time.
+                    // Warn if any CONTEST entries were displaced.
+                    long displacedContest = candidates.stream()
+                            .filter(e -> e.mode() == ConflictMode.CONTEST).count();
+                    if (displacedContest > 0) {
+                        Logger.getLogger("RepositoryRegistry").warning(
+                                "EXCLUSIVE binding for " + api.getName() + " displaced "
+                                        + displacedContest + " CONTEST candidate(s).");
+                    }
+                    continue; // implBindings already has the winner
+                }
+
+                // No EXCLUSIVE: filter out SUGGEST if any CONTEST exists
+                var contests = candidates.stream()
+                        .filter(e -> e.mode() == ConflictMode.CONTEST).toList();
+                var toResolve = contests.isEmpty() ? candidates : contests;
+
+                if (toResolve.size() == 1) {
+                    implBindings.put(api, toResolve.getFirst().implClass());
+                    continue;
+                }
+
+                // Multiple candidates — need resolver
+                if (options.bindingResolver == null) {
+                    var implNames = toResolve.stream()
+                            .map(e -> e.implClass().getName())
+                            .collect(Collectors.joining(", "));
+                    var e = new RepositoryInitializationException(
+                            "Binding conflict for " + api.getName()
+                                    + " (candidates: " + implNames + ")"
+                                    + " but no bindingResolver was provided in RegistrationOptions.");
+                    if (err == null) err = e; else err.addSuppressed(e);
+                    continue;
+                }
+
+                var candidateList = toResolve.stream()
+                        .map(e -> new BindingCandidate(e.implClass(), e.mode(), e.registeredBy()))
+                        .toList();
+                var implClasses = candidateList.stream().map(BindingCandidate::implClass).toList();
+                try {
+                    Class<? extends Repository> winner = options.bindingResolver.apply(api, candidateList);
+                    if (winner == null || !implClasses.contains(winner)) {
+                        var e = new RepositoryInitializationException(
+                                "bindingResolver returned an invalid winner for " + api.getName());
+                        if (err == null) err = e; else err.addSuppressed(e);
+                    } else {
+                        implBindings.put(api, winner);
+                    }
+                } catch (Throwable ex) {
+                    var e = new RepositoryInitializationException(
+                            "bindingResolver threw for " + api.getName(), ex);
+                    if (err == null) err = e; else err.addSuppressed(e);
+                }
+            }
+
+            // Phase 3: onReady
             for (var r : registrations) {
                 if (r.onReady != null) {
                     if (r.readyExecutor != null) {
                         // Async: errors are logged but cannot be propagated into the future as it may
-                        //  have completed before the async handler has completed.
+                        // not have completed before the async handler has completed.
                         ThrowingConsumer<RepositoryRegistry> onReady = r.onReady;
                         r.readyExecutor.execute(() -> {
                             try {
@@ -646,9 +799,6 @@ public final class RepositoryRegistry {
 
         MigrationLoader.loadMigrations(platformHandle, scope);
 
-        // Binding conflicts are collected so all resource files are processed before reporting.
-        // Hard errors (missing class, bad content, invalid contract) still propagate immediately.
-        List<RepositoryInitializationException> bindingConflicts = new ArrayList<>();
         try {
             resourceWalker.visit(scope, DB_REGISTRY_RESOURCE_PATH, entry -> {
                 String apiName = entry.path().substring(DB_REGISTRY_RESOURCE_PATH.length());
@@ -672,29 +822,14 @@ public final class RepositoryRegistry {
                 Repository.identifyRepositoryApi(implClass); // throws if not valid
 
                 synchronized (this) {
-                    var existing = implBindings.get(apiClass);
-                    if (existing != null && existing != implClass) {
-                        // Accumulate conflicts rather than throwing so all entries are still scanned.
-                        bindingConflicts.add(new RepositoryInitializationException(
-                                "Conflicting impl bindings for " + apiName
-                                        + ": existing=" + existing.getName() + ", new=" + implName
-                                        + ". Resolve by having only one plugin declare this binding,"
-                                        + " or call bindImpl() explicitly."));
-                    } else {
-                        implBindings.put(apiClass, implClass);
-                    }
+                    bindingCandidates
+                            .computeIfAbsent(apiClass, k -> new ArrayList<>())
+                            .add(new BindingEntry(implClass, ConflictMode.SUGGEST, platformHandle));
                 }
             });
         } catch (Exception ex) {
             throw new RepositoryInitializationException(
                     "Error while scanning plugin jar resources: " + platformHandle.name(), BubbleUpException.unwrap(ex));
-        }
-
-        if (!bindingConflicts.isEmpty()) {
-            var combined = new RepositoryInitializationException(
-                    bindingConflicts.size() + " impl binding conflict(s) found while scanning " + platformHandle.name() + ".");
-            bindingConflicts.forEach(combined::addSuppressed);
-            throw combined;
         }
     }
 
@@ -726,7 +861,7 @@ public final class RepositoryRegistry {
             @NotNull Class<T> compositionType
     ) {
         if (registrationClosed) throw new IllegalStateException("Registration is closed!");
-        registerCompositionInternal(compositionType, discoverCompositionCreator(compositionType), null);
+        registerCompositionInternal(compositionType, discoverCompositionCreator(compositionType), ConflictMode.CONTEST, null);
     }
 
     /**
@@ -751,7 +886,53 @@ public final class RepositoryRegistry {
             @NotNull ThrowingFunction<@NotNull RepositoryRegistry, @NotNull T> creator
     ) {
         if (registrationClosed) throw new IllegalStateException("Registration is closed!");
-        registerCompositionInternal(compositionType, creator, null);
+        registerCompositionInternal(compositionType, creator, ConflictMode.CONTEST, null);
+    }
+
+    /**
+     * Registers a replaceable {@link RepositoryComposition} implementation with the given conflict mode.
+     * <p>Only valid for replaceable (abstract-extending) lineage. Calling this on a direct-concrete
+     * composition type throws {@link IllegalArgumentException}.</p>
+     *
+     * @throws IllegalArgumentException If {@code compositionType} has direct lineage (not replaceable),
+     *     is abstract or an interface, or if the abstract intermediary chain is invalid.
+     * @throws RepositoryInitializationException If {@code mode} is {@link ConflictMode#EXCLUSIVE} and
+     *     another composition is already registered for the same abstract key.
+     */
+    public synchronized <T extends RepositoryComposition> void registerComposition(
+            @NotNull Class<T> compositionType,
+            @NotNull ConflictMode mode
+    ) throws RepositoryInitializationException {
+        if (registrationClosed) throw new IllegalStateException("Registration is closed!");
+        Class<? extends RepositoryComposition> abstractKey = RepositoryComposition.identifyAbstractKey(compositionType);
+        if (abstractKey == null) {
+            throw new IllegalArgumentException(
+                    "ConflictMode use is only applicable to replaceable (abstract-extending) composition types. "
+                            + compositionType.getName() + " is a direct composition type and does not support ConflictMode.");
+        }
+        registerCompositionInternal(compositionType, discoverCompositionCreator(compositionType), mode, null);
+    }
+
+    /**
+     * Registers a replaceable {@link RepositoryComposition} with a custom creator and explicit mode.
+     *
+     * @throws IllegalArgumentException If {@code compositionType} has direct lineage.
+     * @throws RepositoryInitializationException If {@code mode} is {@link ConflictMode#EXCLUSIVE} and
+     *     another composition is already registered for the same abstract key.
+     */
+    public synchronized <T extends RepositoryComposition> void registerComposition(
+            @NotNull Class<T> compositionType,
+            @NotNull ThrowingFunction<@NotNull RepositoryRegistry, @NotNull T> creator,
+            @NotNull ConflictMode mode
+    ) throws RepositoryInitializationException {
+        if (registrationClosed) throw new IllegalStateException("Registration is closed!");
+        Class<? extends RepositoryComposition> abstractKey = RepositoryComposition.identifyAbstractKey(compositionType);
+        if (abstractKey == null) {
+            throw new IllegalArgumentException(
+                    "ConflictMode use is only applicable to replaceable (abstract-extending) composition types. "
+                            + compositionType.getName() + " is a direct composition type and does not support ConflictMode.");
+        }
+        registerCompositionInternal(compositionType, creator, mode, null);
     }
 
     /**
@@ -762,18 +943,32 @@ public final class RepositoryRegistry {
     private <T extends RepositoryComposition> void registerCompositionInternal(
             Class<T> compositionType,
             ThrowingFunction<RepositoryRegistry, ? extends T> creator,
+            @NotNull ConflictMode mode,
             @Nullable PlatformHandle registeredBy
-    ) {
+    ) throws RepositoryInitializationException {
         // Use the static helper — both validates AND identifies lineage
         Class<? extends RepositoryComposition> abstractKey = RepositoryComposition.identifyAbstractKey(compositionType);
         if (abstractKey != null) {
-            // Lineage 2: replaceable — append to contest under the abstract key
-            compositionContests
-                    .computeIfAbsent(abstractKey, k -> new ArrayList<>())
-                    .add(new CompositionContestEntry(compositionType, creator, registeredBy));
+            // Lineage 2 replaceable
+            var list = compositionContests.computeIfAbsent(abstractKey, k -> new ArrayList<>());
+            if (mode == ConflictMode.EXCLUSIVE && !list.isEmpty()) {
+                throw new RepositoryInitializationException(
+                        "Exclusive composition conflict for " + abstractKey.getName()
+                                + ": already has competitor " + list.getFirst().concreteType().getName()
+                                + ", cannot also register " + compositionType.getName() + " as EXCLUSIVE.");
+            }
+            list.add(new CompositionContestEntry(compositionType, creator, mode, registeredBy));
         } else {
-            // Lineage 1: direct — store under the concrete key (last-write wins)
-            directCompositionCreators.put(compositionType, creator);
+            // Lineage 1 direct: mode is not applicable, store under the concrete key (last-write wins)
+            @SuppressWarnings("unchecked")
+            var previous = directCompositionCreators.put(
+                    compositionType, (ThrowingFunction<RepositoryRegistry, ? extends RepositoryComposition>) creator);
+            if (previous != null) {
+                Logger.getLogger("RepositoryRegistry").warning(
+                        "Direct composition " + compositionType.getName()
+                                + " was registered more than once; the previous creator has been replaced."
+                                + " This may indicate a duplicate or conflicting registration.");
+            }
         }
     }
 
@@ -939,6 +1134,17 @@ public final class RepositoryRegistry {
         return resolveByDependencyOrder(candidates, CompositionCandidate::registeredBy, CompositionCandidate::concreteType);
     }
 
+    /**
+     * Default impl-binding conflict resolver based on {@link PlatformHandle} dependency order.
+     * Returns the impl class registered by the most downstream platform. Returns {@code null}
+     * if no unique downstream winner exists.
+     */
+    public static @Nullable Class<? extends Repository> defaultBindingConflictResolver(
+            @NotNull Class<? extends Repository> api,
+            @NotNull List<BindingCandidate> candidates) {
+        return resolveByDependencyOrder(candidates, BindingCandidate::registeredBy, BindingCandidate::implClass);
+    }
+
     private static <T, R> @Nullable R resolveByDependencyOrder(
             @NotNull List<T> candidates,
             @NotNull Function<T, @Nullable PlatformHandle> handleExtractor,
@@ -956,6 +1162,88 @@ public final class RepositoryRegistry {
             return resultExtractor.apply(candidate);
         }
         return null;
+    }
+
+    // -----------------------------------------------------------------------
+    // RegistrationOptions
+    // -----------------------------------------------------------------------
+
+    /**
+     * Configuration for {@link #closeRegistration(RegistrationOptions)}.
+     * <p>
+     * Use {@link #withDefaults()} to pre-populate all resolvers with the dependency-order
+     * default, or {@link #empty()} (equivalent to calling {@link #closeRegistration()}) to
+     * treat any unresolved conflict as a fatal error.
+     * </p>
+     */
+    public static final class RegistrationOptions {
+
+        @Nullable ThrowingBiFunction<Class<? extends Repository>, List<ProviderCandidate>, SqlDatabaseManager> providerResolver;
+        @Nullable ThrowingBiFunction<Class<? extends RepositoryComposition>, List<CompositionCandidate>, Class<? extends RepositoryComposition>> compositionResolver;
+        @Nullable ThrowingBiFunction<Class<? extends Repository>, List<BindingCandidate>, Class<? extends Repository>> bindingResolver;
+        boolean continueOnConfigureError = false;
+
+        private RegistrationOptions() {}
+
+        /**
+         * Returns a {@code RegistrationOptions} with all three resolvers pre-set to the
+         * dependency-order defaults ({@link #defaultProviderConflictResolver},
+         * {@link #defaultCompositionConflictResolver}, {@link #defaultBindingConflictResolver}).
+         */
+        public static RegistrationOptions withDefaults() {
+            RegistrationOptions opts = new RegistrationOptions();
+            opts.providerResolver = RepositoryRegistry::defaultProviderConflictResolver;
+            opts.compositionResolver = RepositoryRegistry::defaultCompositionConflictResolver;
+            opts.bindingResolver = RepositoryRegistry::defaultBindingConflictResolver;
+            return opts;
+        }
+
+        /**
+         * Returns a {@code RegistrationOptions} with all resolvers {@code null}.
+         * Any conflict causes the close future to complete exceptionally.
+         * Equivalent to calling {@link #closeRegistration()} directly.
+         */
+        public static RegistrationOptions empty() {
+            return new RegistrationOptions();
+        }
+
+        /** Sets the resolver for contested provider slots. */
+        public RegistrationOptions providerResolver(
+                @Nullable ThrowingBiFunction<Class<? extends Repository>, List<ProviderCandidate>, SqlDatabaseManager> resolver) {
+            this.providerResolver = resolver;
+            return this;
+        }
+
+        /** Sets the resolver for contested composition slots. */
+        public RegistrationOptions compositionResolver(
+                @Nullable ThrowingBiFunction<Class<? extends RepositoryComposition>, List<CompositionCandidate>, Class<? extends RepositoryComposition>> resolver) {
+            this.compositionResolver = resolver;
+            return this;
+        }
+
+        /** Sets the resolver for contested impl-binding slots. */
+        public RegistrationOptions bindingResolver(
+                @Nullable ThrowingBiFunction<Class<? extends Repository>, List<BindingCandidate>, Class<? extends Repository>> resolver) {
+            this.bindingResolver = resolver;
+            return this;
+        }
+
+        /**
+         * Controls what happens when a platform handle's {@code onConfigure} callback throws.
+         * <p>
+         * When {@code true}: the errored handle is blackmarked, all its in-progress registrations
+         * are discarded, a warning is logged, and the close future can still complete successfully
+         * (assuming no other errors). When {@code false} (the default): the same discarding and
+         * blackmarking occurs, but the error is propagated and the future completes exceptionally.
+         * </p>
+         *
+         * @param continueOnError {@code true} to treat configure failures as non-fatal; {@code false}
+         *                        (default) to treat them as fatal.
+         */
+        public RegistrationOptions continueOnConfigureError(boolean continueOnError) {
+            this.continueOnConfigureError = continueOnError;
+            return this;
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -1047,33 +1335,44 @@ public final class RepositoryRegistry {
          */
         public <T extends Repository> void publish(@NotNull Class<T> api, @NotNull SqlDatabaseManager manager)
                 throws RepositoryInitializationException {
-            registry.publishInternal(api, manager, PublishMode.EXCLUSIVE, platformHandle);
+            registry.publishInternal(api, manager, ConflictMode.EXCLUSIVE, platformHandle);
         }
 
         /**
          * Registers {@code manager} as a provider for {@code api} with the specified mode.
-         * @see RepositoryRegistry#publish(Class, SqlDatabaseManager, PublishMode)
+         * @see RepositoryRegistry#publish(Class, SqlDatabaseManager, ConflictMode)
          */
         public <T extends Repository> void publish(@NotNull Class<T> api, @NotNull SqlDatabaseManager manager,
-                @NotNull PublishMode mode) throws RepositoryInitializationException {
+                @NotNull ConflictMode mode) throws RepositoryInitializationException {
             registry.publishInternal(api, manager, mode, platformHandle);
         }
 
         /**
-         * Programmatically overrides the impl binding for {@code api}.
+         * Programmatically binds {@code implClass} as the EXCLUSIVE provider for {@code api}.
          * @see RepositoryRegistry#bindImpl(Class, Class)
          */
-        public <T extends Repository> void bindImpl(@NotNull Class<T> api, @NotNull Class<? extends T> implClass) {
-            registry.bindImpl(api, implClass);
+        public <T extends Repository> void bindImpl(@NotNull Class<T> api, @NotNull Class<? extends T> implClass)
+                throws RepositoryInitializationException {
+            registry.bindImplInternal(api, implClass, ConflictMode.EXCLUSIVE, platformHandle);
+        }
+
+        /**
+         * Programmatically binds {@code implClass} as a provider for {@code api} with the given mode.
+         * @see RepositoryRegistry#bindImpl(Class, Class, ConflictMode)
+         */
+        public <T extends Repository> void bindImpl(@NotNull Class<T> api, @NotNull Class<? extends T> implClass,
+                @NotNull ConflictMode mode) throws RepositoryInitializationException {
+            registry.bindImplInternal(api, implClass, mode, platformHandle);
         }
 
         /**
          * Registers a {@link RepositoryComposition} with an auto-discovered constructor.
          * @see RepositoryRegistry#registerComposition(Class)
          */
-        public <T extends RepositoryComposition> void registerComposition(@NotNull Class<T> compositionType) {
+        public <T extends RepositoryComposition> void registerComposition(@NotNull Class<T> compositionType)
+                throws RepositoryInitializationException {
             registry.registerCompositionInternal(
-                    compositionType, registry.discoverCompositionCreator(compositionType), platformHandle);
+                    compositionType, registry.discoverCompositionCreator(compositionType), ConflictMode.CONTEST, platformHandle);
         }
 
         /**
@@ -1083,8 +1382,37 @@ public final class RepositoryRegistry {
         public <T extends RepositoryComposition> void registerComposition(
                 @NotNull Class<T> compositionType,
                 @NotNull ThrowingFunction<@NotNull RepositoryRegistry, @NotNull T> creator
-        ) {
-            registry.registerCompositionInternal(compositionType, creator, platformHandle);
+        ) throws RepositoryInitializationException {
+            registry.registerCompositionInternal(compositionType, creator, ConflictMode.CONTEST, platformHandle);
+        }
+
+        /**
+         * Registers a replaceable {@link RepositoryComposition} with an auto-discovered constructor and the given mode.
+         */
+        public <T extends RepositoryComposition> void registerComposition(
+                @NotNull Class<T> compositionType, @NotNull ConflictMode mode)
+                throws RepositoryInitializationException {
+            Class<? extends RepositoryComposition> abstractKey = RepositoryComposition.identifyAbstractKey(compositionType);
+            if (abstractKey == null) throw new IllegalArgumentException(
+                    "ConflictMode is only applicable to replaceable (abstract-extending) composition types. "
+                            + compositionType.getName() + " is a direct composition type.");
+            registry.registerCompositionInternal(
+                    compositionType, registry.discoverCompositionCreator(compositionType), mode, platformHandle);
+        }
+
+        /**
+         * Registers a replaceable {@link RepositoryComposition} with a custom creator and the given mode.
+         */
+        public <T extends RepositoryComposition> void registerComposition(
+                @NotNull Class<T> compositionType,
+                @NotNull ThrowingFunction<@NotNull RepositoryRegistry, @NotNull T> creator,
+                @NotNull ConflictMode mode)
+                throws RepositoryInitializationException {
+            Class<? extends RepositoryComposition> abstractKey = RepositoryComposition.identifyAbstractKey(compositionType);
+            if (abstractKey == null) throw new IllegalArgumentException(
+                    "ConflictMode is only applicable to replaceable (abstract-extending) composition types. "
+                            + compositionType.getName() + " is a direct composition type.");
+            registry.registerCompositionInternal(compositionType, creator, mode, platformHandle);
         }
     }
 }

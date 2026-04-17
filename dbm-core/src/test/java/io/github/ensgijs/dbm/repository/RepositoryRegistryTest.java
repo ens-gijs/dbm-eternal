@@ -19,8 +19,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
 
-import static io.github.ensgijs.dbm.repository.RepositoryRegistry.DB_REGISTRY_RESOURCE_PATH;
-import static io.github.ensgijs.dbm.repository.RepositoryRegistry.ResourceWalker;
+import static io.github.ensgijs.dbm.repository.RepositoryRegistry.*;
 import static io.github.ensgijs.dbm.util.io.ResourceScanner.ResourceEntry;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -117,10 +116,10 @@ public class RepositoryRegistryTest {
     void testPublishContest() throws Exception {
         SqlDatabaseManager manager2 = mock(SqlDatabaseManager.class);
 
-        registry.publish(FakeRepo.class, mockManager, RepositoryRegistry.PublishMode.CONTEST);
-        registry.publish(FakeRepo.class, manager2, RepositoryRegistry.PublishMode.CONTEST);
+        registry.publish(FakeRepo.class, mockManager, ConflictMode.CONTEST);
+        registry.publish(FakeRepo.class, manager2, ConflictMode.CONTEST);
 
-        var future = registry.closeRegistration((api, managers) -> manager2);
+        var future = registry.closeRegistration(RegistrationOptions.empty().providerResolver((api, managers) -> manager2));
         assertTrue(future.get(1, TimeUnit.SECONDS));
         assertTrue(registry.isProvidedBy(FakeRepo.class, manager2));
         assertFalse(registry.isProvidedBy(FakeRepo.class, mockManager));
@@ -130,10 +129,10 @@ public class RepositoryRegistryTest {
     @DisplayName("CONTEST publish: null conflictResolver causes future to complete exceptionally")
     void testPublishContestNullResolver() throws Exception {
         SqlDatabaseManager manager2 = mock(SqlDatabaseManager.class);
-        registry.publish(FakeRepo.class, mockManager, RepositoryRegistry.PublishMode.CONTEST);
-        registry.publish(FakeRepo.class, manager2, RepositoryRegistry.PublishMode.CONTEST);
+        registry.publish(FakeRepo.class, mockManager, ConflictMode.CONTEST);
+        registry.publish(FakeRepo.class, manager2, ConflictMode.CONTEST);
 
-        var future = registry.closeRegistration(null);
+        var future = registry.closeRegistration();
         assertThrows(ExecutionException.class, () -> future.get(1, TimeUnit.SECONDS));
     }
 
@@ -316,12 +315,14 @@ public class RepositoryRegistryTest {
         }
 
         @Test
-        @DisplayName("Valid resource registers impl binding")
+        @DisplayName("Valid resource registers impl binding (resolved after closeRegistration)")
         void testValidScan() throws Exception {
             stubWalker(mockEntry(FakeRepo.class.getName(), FakeRepoImpl.class.getName()));
 
             registry.scanPlugin(pluginA, getClass().getClassLoader());
 
+            // SUGGEST bindings are deferred to closeRegistration; check after close
+            registry.closeRegistration().get(2, TimeUnit.SECONDS);
             assertSame(FakeRepoImpl.class, registry.getImplementationType(FakeRepo.class));
         }
 
@@ -356,16 +357,20 @@ public class RepositoryRegistryTest {
         }
 
         @Test
-        @DisplayName("Conflicting impl bindings for the same api throw RepositoryInitializationException")
+        @DisplayName("Conflicting SUGGEST impl bindings are deferred to closeRegistration, not scanPlugin")
         void testImplBindingConflict() throws Exception {
             // First scan: FakeRepoImpl for FakeRepo
             stubWalker(mockEntry(FakeRepo.class.getName(), FakeRepoImpl.class.getName()));
             registry.scanPlugin(pluginA, getClass().getClassLoader());
 
-            // Second scan: AltFakeRepoImpl for FakeRepo (different impl → conflict)
+            // Second scan: AltFakeRepoImpl for FakeRepo — conflict is now deferred (SUGGEST semantics)
             stubWalker(mockEntry(FakeRepo.class.getName(), AltFakeRepoImpl.class.getName()));
-            assertThrows(RepositoryInitializationException.class,
-                    () -> registry.scanPlugin(pluginB, getClass().getClassLoader()));
+            // scanPlugin itself no longer throws for SUGGEST conflicts
+            assertDoesNotThrow(() -> registry.scanPlugin(pluginB, getClass().getClassLoader()));
+
+            // The conflict surfaces at closeRegistration (no resolver provided)
+            var future = registry.closeRegistration();
+            assertThrows(ExecutionException.class, () -> future.get(2, TimeUnit.SECONDS));
         }
 
         @Test
@@ -393,7 +398,7 @@ public class RepositoryRegistryTest {
             @DisplayName("Single competitor: abstract key returns instance, concrete key throws")
             void testSingleCompetitorAbstractKeyWins() throws Exception {
                 registry.registerComposition(BaseLogicImpl.class);
-                registry.closeRegistration(null, null).get(1, TimeUnit.SECONDS);
+                registry.closeRegistration().get(1, TimeUnit.SECONDS);
 
                 AbstractBaseLogic instance = registry.getCompositeRepository(AbstractBaseLogic.class);
                 assertNotNull(instance);
@@ -408,7 +413,7 @@ public class RepositoryRegistryTest {
             void testTwoCompetitorsWithResolver() throws Exception {
                 registry.registerComposition(BaseLogicImpl.class);
                 registry.registerComposition(EnhancedLogicImpl.class);
-                registry.closeRegistration(null, (abstractKey, competitors) -> EnhancedLogicImpl.class)
+                registry.closeRegistration(RegistrationOptions.empty().compositionResolver((abstractKey, competitors) -> EnhancedLogicImpl.class))
                         .get(1, TimeUnit.SECONDS);
 
                 AbstractBaseLogic instance = registry.getCompositeRepository(AbstractBaseLogic.class);
@@ -422,7 +427,7 @@ public class RepositoryRegistryTest {
                 registry.registerComposition(BaseLogicImpl.class);
                 registry.registerComposition(EnhancedLogicImpl.class);
 
-                var future = registry.closeRegistration(null, null);
+                var future = registry.closeRegistration();
                 assertThrows(ExecutionException.class, () -> future.get(1, TimeUnit.SECONDS));
             }
 
@@ -596,6 +601,122 @@ public class RepositoryRegistryTest {
                 repo = r.get(FakeRepo.class);
                 repo.onCacheInvalidatedEvent().subscribe(ignored -> cache.clear());
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Binding conflict tests
+    // -----------------------------------------------------------------------
+
+    /** Creates a ResourceEntry stub for use in custom ResourceWalker lambdas. */
+    private ResourceEntry entry(String apiFQCN, String implFQCN) {
+        try {
+            ResourceEntry re = mock(ResourceEntry.class);
+            when(re.path()).thenReturn(DB_REGISTRY_RESOURCE_PATH + apiFQCN);
+            when(re.asReader()).thenReturn(new BufferedReader(new StringReader(implFQCN)));
+            return re;
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /** Publishes mockManager as EXCLUSIVE provider for the given api (test brevity helper). */
+    private void publish(Class<? extends Repository> api) throws RepositoryInitializationException {
+        registry.publish(api, mockManager);
+    }
+
+    @Nested
+    class BindingConflictTests {
+
+        @Test
+        void suggest_suggest_noResolver_throwsAtClose() throws Exception {
+            // Two resource-file SUGGEST entries → no resolver → close fails
+            ResourceWalker walker = (cl, path, visitor) -> {
+                try {
+                    visitor.accept(entry(FakeRepo.class.getName(), FakeRepoImpl.class.getName()));
+                    visitor.accept(entry(FakeRepo.class.getName(), AltFakeRepoImpl.class.getName()));
+                } catch (Throwable t) { throw new java.io.IOException(t); }
+            };
+            registry = new RepositoryRegistry(walker);
+            pluginA = plugin("A");
+            registry.register(pluginA, getClass().getClassLoader());
+            var future = registry.closeRegistration(); // no resolver
+            var ex = assertThrows(ExecutionException.class, () -> future.get(2, TimeUnit.SECONDS));
+            assertInstanceOf(RepositoryInitializationException.class, ex.getCause());
+        }
+
+        @Test
+        void exclusive_exclusive_throwsAtRegistration() throws Exception {
+            registry = new RepositoryRegistry(mockResourceWalker);
+            pluginA = plugin("A");
+            registry.register(pluginA, getClass().getClassLoader());
+            registry.bindImpl(FakeRepo.class, FakeRepoImpl.class); // first EXCLUSIVE
+            assertThrows(RepositoryInitializationException.class,
+                    () -> registry.bindImpl(FakeRepo.class, AltFakeRepoImpl.class)); // second EXCLUSIVE
+        }
+
+        @Test
+        void exclusive_displaces_suggest_no_error() throws Exception {
+            // Resource file SUGGEST + programmatic EXCLUSIVE → EXCLUSIVE wins silently
+            ResourceWalker walker = (cl, path, visitor) -> {
+                try { visitor.accept(entry(FakeRepo.class.getName(), AltFakeRepoImpl.class.getName())); }
+                catch (Throwable t) { throw new java.io.IOException(t); }
+            };
+            registry = new RepositoryRegistry(walker);
+            pluginA = plugin("A");
+            registry.register(pluginA, getClass().getClassLoader());
+            registry.bindImpl(FakeRepo.class, FakeRepoImpl.class); // EXCLUSIVE wins
+
+            publish(FakeRepo.class);
+            var future = registry.closeRegistration();
+            future.get(2, TimeUnit.SECONDS);
+            assertEquals(FakeRepoImpl.class, registry.getImplementationType(FakeRepo.class));
+        }
+
+        @Test
+        void exclusive_displaces_contest_with_warning() throws Exception {
+            registry = new RepositoryRegistry(mockResourceWalker);
+            pluginA = plugin("A");
+            registry.register(pluginA, getClass().getClassLoader());
+            registry.bindImpl(FakeRepo.class, AltFakeRepoImpl.class, ConflictMode.CONTEST);
+            registry.bindImpl(FakeRepo.class, FakeRepoImpl.class, ConflictMode.EXCLUSIVE); // EXCLUSIVE wins
+
+            publish(FakeRepo.class);
+            var future = registry.closeRegistration();
+            future.get(2, TimeUnit.SECONDS);
+            assertEquals(FakeRepoImpl.class, registry.getImplementationType(FakeRepo.class));
+        }
+
+        @Test
+        void suggest_contest_contestWins_noResolver() throws Exception {
+            ResourceWalker walker = (cl, path, visitor) -> {
+                try { visitor.accept(entry(FakeRepo.class.getName(), AltFakeRepoImpl.class.getName())); }
+                catch (Throwable t) { throw new java.io.IOException(t); }
+            };
+            registry = new RepositoryRegistry(walker);
+            pluginA = plugin("A");
+            registry.register(pluginA, getClass().getClassLoader());
+            registry.bindImpl(FakeRepo.class, FakeRepoImpl.class, ConflictMode.CONTEST); // CONTEST wins over SUGGEST
+
+            publish(FakeRepo.class);
+            var future = registry.closeRegistration(); // no resolver needed
+            future.get(2, TimeUnit.SECONDS);
+            assertEquals(FakeRepoImpl.class, registry.getImplementationType(FakeRepo.class));
+        }
+
+        @Test
+        void contest_contest_withResolver_resolves() throws Exception {
+            registry = new RepositoryRegistry(mockResourceWalker);
+            pluginA = plugin("A");
+            registry.register(pluginA, getClass().getClassLoader());
+            registry.bindImpl(FakeRepo.class, FakeRepoImpl.class, ConflictMode.CONTEST);
+            registry.bindImpl(FakeRepo.class, AltFakeRepoImpl.class, ConflictMode.CONTEST);
+
+            publish(FakeRepo.class);
+            var opts = RegistrationOptions.empty().bindingResolver((api, candidates) -> AltFakeRepoImpl.class);
+            var future = registry.closeRegistration(opts);
+            future.get(2, TimeUnit.SECONDS);
+            assertEquals(AltFakeRepoImpl.class, registry.getImplementationType(FakeRepo.class));
         }
     }
 }
