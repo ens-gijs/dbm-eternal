@@ -3,6 +3,12 @@
 .claude/settings.local.json
 CLAUDE.local.md
 
+### Graphify ###
+# keep graph outputs, skip heavy/local-only files
+graphify-out/cache/            # optional: commit for shared extraction speed, skip to keep repo small
+graphify-out/manifest.json     # mtime-based, invalid after git clone — always gitignore this
+graphify-out/cost.json         # local token tracking, not useful to share
+
 # ##############################################################################
 # Created by https://www.toptal.com/developers/gitignore/api/gradle,intellij,java
 # Edit at https://www.toptal.com/developers/gitignore?templates=gradle,intellij,java
@@ -17,6 +23,7 @@ CLAUDE.local.md
 .idea/**/usage.statistics.xml
 .idea/**/dictionaries
 .idea/**/shelf
+.idea/*.iml
 
 # AWS User-specific
 .idea/**/aws.xml
