@@ -203,6 +203,9 @@ public class SqlClient {
      * SQL dialect than the current one. Subscribers receive the incoming dialect and may throw
      * {@link IllegalStateException} to reject the change. Not fired on initial pool construction
      * or when the dialect is unchanged.
+     * <p><b>WARNING</b> event may be triggered from within a {@code synchronized} block. Subscribers may run while
+     * holding the SqlClient monitor. Reentrant calls back into the same manager are fine; cross-thread waits that
+     * need that monitor will deadlock.</p>
      * @see #onBeforePoolResetEvent()
      */
     public SubscribableEvent<SqlDialect> onBeforeDialectChangeEvent() { return onBeforeDialectChangeEvent; }
