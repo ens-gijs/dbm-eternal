@@ -1,0 +1,4 @@
+CREATE TABLE IF NOT EXISTS FakeRepo (
+    "key" INTEGER PRIMARY KEY,
+    "value" VARCHAR(64) NOT NULL
+);

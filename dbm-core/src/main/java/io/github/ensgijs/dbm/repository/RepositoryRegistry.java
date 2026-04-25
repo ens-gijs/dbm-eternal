@@ -492,6 +492,7 @@ public final class RepositoryRegistry {
         return closeRegistration(RegistrationOptions.empty());
     }
 
+    private volatile CompletableFuture<Boolean> closeRegistrationFuture;
     /**
      * Closes registration, resolves conflicts, and runs lifecycle callbacks.
      *
@@ -523,10 +524,11 @@ public final class RepositoryRegistry {
      */
     @VisibleForTesting
     public synchronized CompletableFuture<Boolean> closeRegistration(@NotNull RegistrationOptions options) {
+        if (closeRegistrationFuture != null)
+            return closeRegistrationFuture.thenApply(ignore -> false);
         if (registrationClosed) return CompletableFuture.completedFuture(false);
-        registrationClosed = true;
 
-        final CompletableFuture<Boolean> future = new CompletableFuture<>();
+        closeRegistrationFuture = new CompletableFuture<>();
         final List<RegistrationHelper> registrations = new LinkedList<>(this.pendingRegistrations);
         this.pendingRegistrations = null;
         registrations.sort(null);
@@ -534,7 +536,7 @@ public final class RepositoryRegistry {
         Thread.ofVirtual().start(() -> {
             RepositoryInitializationException err = null;
 
-            // Phase 1: onConfigure (dependency order, already sorted)
+            // Phase 1a: onConfigure (dependency order, already sorted)
             Set<PlatformHandle> blackmarkedHandles = new HashSet<>();
             var iter = registrations.listIterator();
             while (iter.hasNext()) {
@@ -552,8 +554,10 @@ public final class RepositoryRegistry {
                     }
                 }
             }
+            // Formally close registration
+            registrationClosed = true;
 
-            // Purge all registrations made by errored handles; their configurations are incomplete
+            // Phase 1b: Purge all registrations made by errored handles; their configurations are incomplete
             // and partial state may be dangerous.
             if (!blackmarkedHandles.isEmpty()) {
                 contestantProviders.forEach((api, list) -> list.removeIf(e -> blackmarkedHandles.contains(e.registeredBy())));
@@ -837,11 +841,12 @@ public final class RepositoryRegistry {
                 }
             }
 
-            if (err != null) future.completeExceptionally(err);
-            else future.complete(true);
+            if (err != null) closeRegistrationFuture.completeExceptionally(err);
+            else closeRegistrationFuture.complete(true);
+            closeRegistrationFuture = null;
         });
 
-        return future;
+        return closeRegistrationFuture;
     }
 
     // -----------------------------------------------------------------------

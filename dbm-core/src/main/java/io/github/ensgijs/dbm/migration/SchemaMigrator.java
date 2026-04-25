@@ -1,10 +1,6 @@
 package io.github.ensgijs.dbm.migration;
 
-import io.github.ensgijs.dbm.sql.DatabaseException;
-import io.github.ensgijs.dbm.sql.ExecutionContext;
-import io.github.ensgijs.dbm.sql.SqlClient;
-import io.github.ensgijs.dbm.sql.SqlDialect;
-import io.github.ensgijs.dbm.sql.SqlStatementSplitter;
+import io.github.ensgijs.dbm.sql.*;
 import io.github.ensgijs.dbm.repository.Repository;
 import io.github.ensgijs.dbm.repository.RepositoryApi;
 import org.jetbrains.annotations.VisibleForTesting;
@@ -31,6 +27,7 @@ public final class SchemaMigrator {
     private final static Logger logger = Logger.getLogger("SchemaMigrator");
 
     private final SqlClient client;
+    private volatile SqlConnectionConfig historyTableEnsuredOnConnConf;
     /// Cache: Name -> Set of applied version timestamps
     private final Map<String, Set<Long>> appliedCache = new ConcurrentHashMap<>();
     private final MigrationProvider migrationProvider;
@@ -64,7 +61,8 @@ public final class SchemaMigrator {
      * <p>The table structure is adapted based on whether the active dialect is MySQL or SQLite.</p>
      * @throws DatabaseException If the DDL execution fails.
      */
-    private void ensureHistoryTable() throws DatabaseException {
+    private synchronized void ensureHistoryTable() throws DatabaseException {
+        if (historyTableEnsuredOnConnConf == client.getSqlConnectionConfig()) return;
         // We use LONG/BIGINT for version to support timestamps
         String sql = switch(Objects.requireNonNull(client.activeDialect(), "Client does not have an active dialect!")) {
             case UNDEFINED -> throw new DatabaseException("Client does not have an active dialect!");
@@ -84,6 +82,7 @@ public final class SchemaMigrator {
                   )""";
         };
         client.executeUpdate(sql);
+        historyTableEnsuredOnConnConf = client.getSqlConnectionConfig();
     }
 
     /**
@@ -92,7 +91,7 @@ public final class SchemaMigrator {
      * has invalidated the existing connection.
      * @throws DatabaseException If the SELECT query fails.
      */
-    public void refreshVersionCache() throws DatabaseException {
+    public synchronized void refreshVersionCache() throws DatabaseException {
         long start = System.currentTimeMillis();
         appliedCache.clear();
         ensureHistoryTable();
@@ -116,7 +115,7 @@ public final class SchemaMigrator {
      * @param repoInterface The interface to inspect for {@link RepositoryApi}.
      * @throws IllegalArgumentException If the annotation is missing.
      */
-    public <I extends Repository> void runMigrationsFor(Class<I> repoInterface) {
+    public synchronized <I extends Repository> void runMigrationsFor(Class<I> repoInterface) {
         RepositoryApi annot = repoInterface.getAnnotation(RepositoryApi.class);
         if (annot == null) {
             throw new IllegalArgumentException(
@@ -140,10 +139,11 @@ public final class SchemaMigrator {
      * @param targetName The name of the functional area to migrate (e.g., "core", "economy").
      * @throws DatabaseException If a migration fails or a dependency is missing/cyclic.
      */
-    public void migrate(String targetName) throws DatabaseException {
+    public synchronized void migrate(String targetName) throws DatabaseException {
         var requiredMigrations = migrationProvider.getMigrations(client.activeDialect(), targetName).stream()
                 .filter(this::isPending).toList();
         if (!requiredMigrations.isEmpty()) {
+            ensureHistoryTable();
             client.executeTransaction(ctx -> {
                 requiredMigrations.forEach(m -> executeMigration(ctx, m));
                 return null;
@@ -172,6 +172,7 @@ public final class SchemaMigrator {
      * @throws DatabaseException If the migration logic throws an exception or the transaction fails.
      */
     private void executeMigration(ExecutionContext ctx, Migration migration) throws DatabaseException {
+        // Caller should already have called ensureHistoryTable();
         logger.info("Applying migration: " + migration.key());
 
         try {
@@ -181,6 +182,7 @@ public final class SchemaMigrator {
                             "Attempted to run migration " + migration.key() + " using the wrong dialect!");
                 // Execute each split statement
                 for (String statement : sqlMigration.statements()) {
+                    logger.fine("Executing: \n" + statement);
                     ctx.executeUpdate(statement);
                 }
             } else if (migration.source() instanceof Migration.JavaSource javaSource) {
@@ -188,6 +190,7 @@ public final class SchemaMigrator {
                 Migration.ProgrammaticMigration instance = javaSource.migrationClass()
                         .getDeclaredConstructor()
                         .newInstance();
+                logger.fine("Running: " + javaSource.migrationClass().getName());
                 instance.migrate(ctx);
             }
 

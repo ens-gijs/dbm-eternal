@@ -255,8 +255,8 @@ public class MigrationLoaderTest {
             List<Migration> migrations = MigrationLoader.loadMigrations(plugin, this.getClass().getClassLoader());
             assertNotNull(migrations);
             assertFalse(migrations.isEmpty());
-            assertEquals(5, migrations.size());
-            Migration m = migrations.get(0);
+            assertEquals(6, migrations.size());
+            Migration m = migrations.get(1);
             assertEquals("MockPlugin", m.providedBy());
             assertEquals("ut-apex", m.name());
             assertEquals(50, m.version());
