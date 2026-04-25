@@ -1,10 +1,12 @@
 package io.github.ensgijs.dbm.repository;
 
 import io.github.ensgijs.dbm.sql.SqlClient;
+import io.github.ensgijs.dbm.sql.SqlDialect;
 
 import java.util.HashMap;
 import java.util.Map;
 
+@RepositoryImpl(dialects = {SqlDialect.MYSQL, SqlDialect.SQLITE})
 public class FakeRepositoryImpl extends AbstractRepository implements FakeRepository {
     public Map<Integer, String> map = new HashMap<>();
     public boolean invalidateCacheCalled = false;

@@ -12,6 +12,7 @@ import java.sql.ParameterMetaData;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 import org.mockito.ArgumentCaptor;
@@ -173,5 +174,50 @@ public class SqlClientTest {
 
         verify(mockConn).rollback();
         verify(mockConn, never()).commit();
+    }
+
+    @Nested
+    @DisplayName("onBeforeDialectChangeEvent")
+    class DialectChangeEventTests {
+
+        @Test
+        @DisplayName("fires with new dialect when dialect changes")
+        void firesOnDialectChange() {
+            SqlClient client = new SqlClient(mockPlatformHandle, connConfig, mockHikariCreator);
+            AtomicReference<SqlDialect> captured = new AtomicReference<>();
+            client.onBeforeDialectChangeEvent().subscribe(captured::set);
+
+            client.setSqlConnectionConfig(new SqliteConnectionConfig(new File("/data/test.db")));
+
+            assertEquals(SqlDialect.SQLITE, captured.get());
+        }
+
+        @Test
+        @DisplayName("does not fire when dialect is unchanged")
+        void doesNotFireOnSameDialect() {
+            SqlClient client = new SqlClient(mockPlatformHandle, connConfig, mockHikariCreator);
+            AtomicReference<SqlDialect> captured = new AtomicReference<>();
+            client.onBeforeDialectChangeEvent().subscribe(captured::set);
+
+            // Different config, same MySQL dialect
+            client.setSqlConnectionConfig(
+                    new MySqlConnectionConfig("10.0.50.99", 1324, "OtherDb", 6, "rot", "tot42"));
+
+            assertNull(captured.get(), "Event must not fire when dialect stays the same");
+        }
+
+        @Test
+        @DisplayName("subscriber exception propagates and rejects the config change")
+        void subscriberExceptionPropagates() {
+            SqlClient client = new SqlClient(mockPlatformHandle, connConfig, mockHikariCreator);
+            client.onBeforeDialectChangeEvent().subscribe(d -> {
+                throw new IllegalStateException("rejected");
+            });
+
+            assertThrows(IllegalStateException.class,
+                    () -> client.setSqlConnectionConfig(new SqliteConnectionConfig(new File("/data/test.db"))));
+            // Config must not have changed
+            assertEquals(SqlDialect.MYSQL, client.activeDialect());
+        }
     }
 }

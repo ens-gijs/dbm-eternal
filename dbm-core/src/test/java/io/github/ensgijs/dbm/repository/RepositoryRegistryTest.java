@@ -5,6 +5,8 @@ import io.github.ensgijs.dbm.platform.SimplePlatformHandle;
 import io.github.ensgijs.dbm.sql.SqlClient;
 import io.github.ensgijs.dbm.sql.SqlConnectionConfig;
 import io.github.ensgijs.dbm.sql.SqlDatabaseManager;
+import io.github.ensgijs.dbm.sql.SqlDialect;
+import io.github.ensgijs.dbm.util.objects.SubscribableEvent;
 import io.github.ensgijs.dbm.util.function.ThrowingBiFunction;
 import io.github.ensgijs.dbm.util.function.ThrowingConsumer;
 import org.jetbrains.annotations.NotNull;
@@ -92,6 +94,9 @@ public class RepositoryRegistryTest {
         SqlConnectionConfig mockConfig = mock(SqlConnectionConfig.class);
         when(mockConfig.connectionId()).thenReturn("test-db");
         when(mockManager.getSqlConnectionConfig()).thenReturn(mockConfig);
+        @SuppressWarnings("unchecked")
+        SubscribableEvent<SqlDialect> mockDialectEvent = mock(SubscribableEvent.class);
+        when(mockManager.onBeforeDialectChangeEvent()).thenReturn(mockDialectEvent);
     }
 
     // -----------------------------------------------------------------------
@@ -717,6 +722,61 @@ public class RepositoryRegistryTest {
             var future = registry.closeRegistration(opts);
             future.get(2, TimeUnit.SECONDS);
             assertEquals(AltFakeRepoImpl.class, registry.getImplementationType(FakeRepo.class));
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // DialectFilterOptions tests
+    // -----------------------------------------------------------------------
+
+    /** SQLite-only impl for dialect filter tests. */
+    @RepositoryImpl(dialects = {SqlDialect.SQLITE})
+    static class SqliteOnlyRepoImpl extends AbstractRepository implements FakeRepo {
+        public SqliteOnlyRepoImpl(SqlClient c) { super(c); }
+        @Override public void put(int key, String value) {}
+        @Override public String get(int key) { return null; }
+    }
+
+    /** MySQL-only impl for dialect filter tests. */
+    @RepositoryImpl(dialects = {SqlDialect.MYSQL})
+    static class MySqlOnlyRepoImpl extends AbstractRepository implements FakeRepo {
+        public MySqlOnlyRepoImpl(SqlClient c) { super(c); }
+        @Override public void put(int key, String value) {}
+        @Override public String get(int key) { return null; }
+    }
+
+    @Nested
+    @DisplayName("RegistrationOptions dialect filter flags")
+    class DialectFilterOptionsTests {
+
+        @BeforeEach
+        void setDialect() {
+            when(mockManager.activeDialect()).thenReturn(SqlDialect.SQLITE);
+        }
+
+        @Test
+        @DisplayName("logDialectFilterDrops(false) suppresses the drop warning and still resolves the compatible impl")
+        void logDialectFilterDrops_false_suppressesWarning() throws Exception {
+            registry.register(pluginA, getClass().getClassLoader());
+            registry.bindImpl(FakeRepo.class, SqliteOnlyRepoImpl.class, ConflictMode.CONTEST);
+            registry.bindImpl(FakeRepo.class, MySqlOnlyRepoImpl.class, ConflictMode.CONTEST);
+            publish(FakeRepo.class);
+
+            var opts = RegistrationOptions.empty().logDialectFilterDrops(false);
+            registry.closeRegistration(opts).get(2, TimeUnit.SECONDS);
+
+            assertEquals(SqliteOnlyRepoImpl.class, registry.getImplementationType(FakeRepo.class));
+        }
+
+        @Test
+        @DisplayName("throwOnExclusiveDialectFilterDrop(false) demotes the error to a warning and close succeeds")
+        void throwOnExclusiveDialectFilterDrop_false_closesNormally() throws Exception {
+            registry.register(pluginA, getClass().getClassLoader());
+            registry.bindImpl(FakeRepo.class, MySqlOnlyRepoImpl.class); // EXCLUSIVE, but MySQL-only on SQLITE provider
+            publish(FakeRepo.class);
+
+            var opts = RegistrationOptions.empty().throwOnExclusiveDialectFilterDrop(false);
+            registry.closeRegistration(opts).get(2, TimeUnit.SECONDS); // must not throw
         }
     }
 }

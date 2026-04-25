@@ -21,7 +21,12 @@ import java.lang.annotation.Target;
  * }
  * }</pre>
  *
+ * <p>Supported SQL dialects belong on the concrete implementation class via
+ * {@link RepositoryImpl @RepositoryImpl}, not here. Dialect support is an impl concern —
+ * placing it on the API would force every implementor to cover the full declared set.</p>
+ *
  * @see Repository
+ * @see RepositoryImpl
  * @see RepositoryRegistry
  */
 @Retention(RetentionPolicy.RUNTIME)

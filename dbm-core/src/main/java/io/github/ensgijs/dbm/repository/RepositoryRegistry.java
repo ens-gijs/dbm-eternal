@@ -3,6 +3,7 @@ package io.github.ensgijs.dbm.repository;
 import io.github.ensgijs.dbm.util.BubbleUpException;
 import io.github.ensgijs.dbm.platform.PlatformHandle;
 import io.github.ensgijs.dbm.sql.SqlDatabaseManager;
+import io.github.ensgijs.dbm.sql.SqlDialect;
 import io.github.ensgijs.dbm.migration.MigrationLoader;
 import io.github.ensgijs.dbm.migration.MigrationParseException;
 import io.github.ensgijs.dbm.util.function.ThrowingBiFunction;
@@ -678,6 +679,69 @@ public final class RepositoryRegistry {
                 var api = entry.getKey();
                 var candidates = entry.getValue();
 
+                // Dialect filter: if a provider was resolved for this api and has a known dialect,
+                // filter candidates to those that declare support for that dialect.
+                {
+                    SqlDatabaseManager provider = resolvedProviders.get(api);
+                    if (provider != null) {
+                        SqlDialect D = provider.activeDialect();
+                        if (D != null && D != SqlDialect.UNDEFINED) {
+                            var filtered = new ArrayList<BindingEntry>();
+                            var dropped = new ArrayList<BindingEntry>();
+                            for (var c : candidates) {
+                                boolean supported;
+                                try {
+                                    supported = Repository.supportsDialect(c.implClass(), D);
+                                } catch (IllegalStateException ex) {
+                                    // Invalid @RepositoryImpl is always a configuration bug — warn and treat as unsupported.
+                                    Logger.getLogger("RepositoryRegistry").warning(
+                                            "Skipping impl " + c.implClass().getName() + " for "
+                                                    + api.getName() + " due to invalid @RepositoryImpl: "
+                                                    + ex.getMessage());
+                                    supported = false;
+                                }
+                                if (supported) filtered.add(c); else dropped.add(c);
+                            }
+                            if (!dropped.isEmpty() && options.logDialectFilterDrops) {
+                                String droppedNames = dropped.stream()
+                                        .map(c -> c.implClass().getSimpleName()
+                                                + " " + dialectsLabel(c.implClass()))
+                                        .collect(Collectors.joining(", "));
+                                Logger.getLogger("RepositoryRegistry").warning(
+                                        "Dialect filter for " + api.getSimpleName() + " (active: " + D
+                                                + ") dropped: " + droppedNames);
+                            }
+                            // Check EXCLUSIVE-dropped before filtered.isEmpty() so the flag applies
+                            // even when the EXCLUSIVE was the sole candidate.
+                            if (dropped.stream().anyMatch(c -> c.mode() == ConflictMode.EXCLUSIVE)) {
+                                implBindings.remove(api);
+                                if (options.throwOnExclusiveDialectFilterDrop) {
+                                    var e = new RepositoryInitializationException(
+                                            "EXCLUSIVE binding for " + api.getName()
+                                                    + " was eliminated by dialect filter (does not support " + D + ").");
+                                    if (err == null) err = e; else err.addSuppressed(e);
+                                } else {
+                                    Logger.getLogger("RepositoryRegistry").warning(
+                                            "EXCLUSIVE binding for " + api.getName()
+                                                    + " was eliminated by dialect filter (does not support "
+                                                    + D + "); suppressed.");
+                                }
+                                continue;
+                            }
+                            if (filtered.isEmpty()) {
+                                var e = new RepositoryInitializationException(
+                                        "No impl for " + api.getName() + " supports dialect " + D
+                                                + "; all " + dropped.size()
+                                                + " candidate(s) were eliminated by dialect filter.");
+                                if (err == null) err = e; else err.addSuppressed(e);
+                                implBindings.remove(api);
+                                continue;
+                            }
+                            candidates = filtered;
+                        }
+                    }
+                }
+
                 // Check for EXCLUSIVE (at most one; enforced at add time)
                 var exclusives = candidates.stream()
                         .filter(e -> e.mode() == ConflictMode.EXCLUSIVE).toList();
@@ -736,6 +800,14 @@ public final class RepositoryRegistry {
                     if (err == null) err = e; else err.addSuppressed(e);
                 }
             }
+
+            // Subscribe to each distinct provider's dialect-change event so that
+            // setSqlConnectionConfig can reject dialect swaps incompatible with registry-bound impls.
+            resolvedProviders.values().stream().distinct()
+                    .forEach(mgr -> {
+                        var evt = mgr.onBeforeDialectChangeEvent();
+                        if (evt != null) evt.subscribe(dialect -> validateDialectChange(mgr, dialect));
+                    });
 
             // Phase 3: onReady
             for (var r : registrations) {
@@ -1165,6 +1237,50 @@ public final class RepositoryRegistry {
     }
 
     // -----------------------------------------------------------------------
+    // Dialect change validation
+    // -----------------------------------------------------------------------
+
+    /**
+     * Validates that changing {@code manager}'s active dialect to {@code newDialect} does not violate
+     * any resolved impl bindings. Called by the {@link io.github.ensgijs.dbm.sql.SqlClient#onBeforeDialectChangeEvent()}
+     * subscriber registered during {@link #closeRegistration()}.
+     *
+     * @throws IllegalStateException If any resolved impl bound to {@code manager} does not support
+     *                               {@code newDialect}.
+     */
+    void validateDialectChange(@NotNull SqlDatabaseManager manager, @NotNull SqlDialect newDialect) {
+        if (!registrationClosed || resolvedProviders == null) return;
+        List<String> errors = new ArrayList<>();
+        for (var entry : resolvedProviders.entrySet()) {
+            if (entry.getValue() != manager) continue;
+            var impl = implBindings.get(entry.getKey());
+            if (impl == null) continue;
+            try {
+                if (!Repository.supportsDialect(impl, newDialect)) {
+                    errors.add(entry.getKey().getSimpleName() + " -> " + impl.getSimpleName()
+                            + " (supports: " + Repository.supportedDialectsOf(impl) + ")");
+                }
+            } catch (IllegalStateException ex) {
+                errors.add(entry.getKey().getSimpleName() + ": " + ex.getMessage());
+            }
+        }
+        if (!errors.isEmpty()) {
+            throw new IllegalStateException(
+                    "Cannot change dialect to " + newDialect
+                            + ": the following repository impls do not support it: "
+                            + String.join(", ", errors));
+        }
+    }
+
+    private static String dialectsLabel(Class<?> implClass) {
+        try {
+            return Repository.supportedDialectsOf(implClass).toString();
+        } catch (IllegalStateException e) {
+            return "[missing @RepositoryImpl]";
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // RegistrationOptions
     // -----------------------------------------------------------------------
 
@@ -1182,6 +1298,8 @@ public final class RepositoryRegistry {
         @Nullable ThrowingBiFunction<Class<? extends RepositoryComposition>, List<CompositionCandidate>, Class<? extends RepositoryComposition>> compositionResolver;
         @Nullable ThrowingBiFunction<Class<? extends Repository>, List<BindingCandidate>, Class<? extends Repository>> bindingResolver;
         boolean continueOnConfigureError = false;
+        boolean logDialectFilterDrops = true;
+        boolean throwOnExclusiveDialectFilterDrop = true;
 
         private RegistrationOptions() {}
 
@@ -1225,6 +1343,26 @@ public final class RepositoryRegistry {
         public RegistrationOptions bindingResolver(
                 @Nullable ThrowingBiFunction<Class<? extends Repository>, List<BindingCandidate>, Class<? extends Repository>> resolver) {
             this.bindingResolver = resolver;
+            return this;
+        }
+
+        /**
+         * Controls whether a WARNING is logged when impl candidates are eliminated by the dialect
+         * filter during {@link RepositoryRegistry#closeRegistration()}.
+         * Default: {@code true}.
+         */
+        public RegistrationOptions logDialectFilterDrops(boolean log) {
+            this.logDialectFilterDrops = log;
+            return this;
+        }
+
+        /**
+         * Controls whether dropping a {@link ConflictMode#EXCLUSIVE EXCLUSIVE} impl binding due to
+         * the dialect filter is treated as a fatal error ({@code true}, default) or logged as a
+         * warning ({@code false}).
+         */
+        public RegistrationOptions throwOnExclusiveDialectFilterDrop(boolean throwOnDrop) {
+            this.throwOnExclusiveDialectFilterDrop = throwOnDrop;
             return this;
         }
 

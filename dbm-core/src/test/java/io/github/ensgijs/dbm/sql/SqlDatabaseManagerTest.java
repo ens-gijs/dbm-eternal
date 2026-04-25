@@ -4,8 +4,10 @@ import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import io.github.ensgijs.dbm.migration.SchemaMigrator;
 import io.github.ensgijs.dbm.platform.PlatformHandle;
+import io.github.ensgijs.dbm.repository.AbstractRepository;
 import io.github.ensgijs.dbm.repository.FakeRepository;
 import io.github.ensgijs.dbm.repository.FakeRepositoryImpl;
+import io.github.ensgijs.dbm.repository.RepositoryImpl;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.*;
 
@@ -236,5 +238,25 @@ public class SqlDatabaseManagerTest {
         @Override public void put(int key, String value) {}
         @Override public String get(int key) { return null; }
         @Override public void clear() {}
+    }
+
+    /** MySQL-only impl; used to verify dialect-change rejection when cached. */
+    @RepositoryImpl(dialects = {SqlDialect.MYSQL})
+    static class MySqlOnlyFakeRepositoryImpl extends AbstractRepository implements FakeRepository {
+        public MySqlOnlyFakeRepositoryImpl(SqlClient c) { super(c); }
+        @Override public void put(int key, String value) {}
+        @Override public String get(int key) { return null; }
+        @Override public void clear() {}
+    }
+
+    @Test
+    @DisplayName("validateNewConfig rejects dialect change when a cached repo does not support the new dialect")
+    void validateNewConfig_cachedIncompatibleRepo_throws() {
+        SqlDatabaseManager manager = new SqlDatabaseManager(
+                mockPlatformHandle, mockConnectionConfig, mockMigrator, mockHikariCreator);
+        manager.getRepository(FakeRepository.class, MySqlOnlyFakeRepositoryImpl.class);
+
+        var sqliteConfig = new SqliteConnectionConfig(new File("/data/test.db"));
+        assertThrows(IllegalStateException.class, () -> manager.setSqlConnectionConfig(sqliteConfig));
     }
 }
