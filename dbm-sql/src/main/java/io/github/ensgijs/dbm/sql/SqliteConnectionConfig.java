@@ -98,8 +98,7 @@ public record SqliteConnectionConfig(@NotNull File file) implements SqlConnectio
      * Creates an isolated in-memory SQLite database with an auto-generated name.
      * <p>
      * Suitable for unit/integration tests and ephemeral non-persistent repository usage.
-     * Each call returns an independent database — no state is shared between managers
-     * returned by different calls.
+     * Each call returns an independent database — no state is shared between in-memory databases.
      * </p>
      *
      * @return A new {@link SqliteMemoryConnectionConfig} backed by a fresh in-memory SQLite database.
@@ -107,19 +106,5 @@ public record SqliteConnectionConfig(@NotNull File file) implements SqlConnectio
      */
     public static SqliteMemoryConnectionConfig inMemory() {
         return new SqliteMemoryConnectionConfig();
-    }
-
-    /**
-     * Creates a named in-memory SQLite database.
-     * <p>
-     * Two instances with the same {@code databaseName} share state within the JVM.
-     * Use an auto-named instance ({@link #inMemory()}) for full isolation.
-     * </p>
-     *
-     * @param databaseName A unique name for the in-memory database.
-     * @return A new {@link SqliteMemoryConnectionConfig}.
-     */
-    public static SqliteMemoryConnectionConfig inMemory(@NotNull String databaseName) {
-        return new SqliteMemoryConnectionConfig(databaseName);
     }
 }

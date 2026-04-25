@@ -19,43 +19,25 @@ class SqliteMemoryConnectionConfigTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("Blank name throws IllegalArgumentException")
-    void blankName_throws() {
-        assertThrows(IllegalArgumentException.class, () -> new SqliteMemoryConnectionConfig("  "));
-    }
-
-    @Test
-    @DisplayName("Null name throws NullPointerException")
-    void nullName_throws() {
-        assertThrows(NullPointerException.class, () -> new SqliteMemoryConnectionConfig(null));
-    }
-
-    @Test
     @DisplayName("dialect() returns SQLITE")
     void dialect_isSqlite() {
-        assertEquals(SqlDialect.SQLITE, new SqliteMemoryConnectionConfig("test").dialect());
+        assertEquals(SqlDialect.SQLITE, new SqliteMemoryConnectionConfig().dialect());
     }
 
     @Test
     @DisplayName("maxConnections() is 1")
     void maxConnections_isOne() {
-        assertEquals(1, new SqliteMemoryConnectionConfig("test").maxConnections());
+        assertEquals(1, new SqliteMemoryConnectionConfig().maxConnections());
     }
 
     @Test
-    @DisplayName("connectionId() contains the database name")
-    void connectionId_containsName() {
-        assertTrue(new SqliteMemoryConnectionConfig("mydb").connectionId().contains("mydb"));
-    }
-
-    @Test
-    @DisplayName("isEquivalent: same name → true, different name → false, null → false")
+    @DisplayName("isEquivalent: same instance → true, different instance → false, null → false")
     void isEquivalent() {
-        var a = new SqliteMemoryConnectionConfig("db");
-        var b = new SqliteMemoryConnectionConfig("db");
-        var c = new SqliteMemoryConnectionConfig("other");
-        assertTrue(a.isEquivalent(b));
-        assertFalse(a.isEquivalent(c));
+        var a = new SqliteMemoryConnectionConfig();
+        var b = new SqliteMemoryConnectionConfig();
+        assertNotSame(a, b);
+        assertTrue(a.isEquivalent(a));
+        assertFalse(a.isEquivalent(b));
         assertFalse(a.isEquivalent(null));
     }
 
@@ -68,17 +50,11 @@ class SqliteMemoryConnectionConfigTest {
     }
 
     @Test
-    @DisplayName("inMemory(name) factory uses supplied name")
-    void inMemoryFactory_namedUsesName() {
-        var cfg = SqliteConnectionConfig.inMemory("my-test-db");
-        assertTrue(cfg.connectionId().contains("my-test-db"));
-    }
-
-    @Test
-    @DisplayName("Two auto-named inMemory() configs are not equivalent")
+    @DisplayName("Two inMemory() configs are not equivalent")
     void autoNamed_areNotEquivalent() {
         var cfgA = SqliteConnectionConfig.inMemory();
         var cfgB = SqliteConnectionConfig.inMemory();
+        assertNotSame(cfgA, cfgB);
         assertFalse(cfgA.isEquivalent(cfgB));
     }
 
@@ -112,22 +88,5 @@ class SqliteMemoryConnectionConfigTest {
                 "SELECT COUNT(*) FROM sqlite_master WHERE name='isolation_test'",
                 rs -> { rs.next(); return rs.getLong(1); });
         assertEquals(0L, count, "Table created in A should not exist in independent B");
-    }
-
-    @Test
-    @DisplayName("Two configs with the same name share data within the JVM")
-    void sameName_sharedData() throws Exception {
-        var cfgA = SqliteConnectionConfig.inMemory("shared-test-" + System.nanoTime());
-        var cfgB = new SqliteMemoryConnectionConfig(
-                ((SqliteMemoryConnectionConfig) cfgA).databaseName());
-
-        var clientA = client(cfgA);
-        clientA.executeUpdate("CREATE TABLE IF NOT EXISTS shared_data (val TEXT)");
-        clientA.executeUpdate("INSERT INTO shared_data VALUES ('ping')");
-
-        var clientB = client(cfgB);
-        String val = clientB.executeQuery("SELECT val FROM shared_data LIMIT 1",
-                rs -> rs.next() ? rs.getString(1) : null);
-        assertEquals("ping", val, "Data written via clientA should be visible via clientB with same db name");
     }
 }
