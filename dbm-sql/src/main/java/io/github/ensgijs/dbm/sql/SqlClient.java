@@ -32,6 +32,7 @@ public class SqlClient {
     protected final @NotNull PlatformHandle platformHandle;
     private final ConsumableSubscribableEvent<SqlClient> onBeforePoolResetEvent = new ConsumableSubscribableEvent<>();
     private final ConsumableSubscribableEvent<SqlClient> onAfterPoolResetEvent = new ConsumableSubscribableEvent<>();
+    private final ConsumableSubscribableEvent<SqlDialect> onBeforeDialectChangeEvent = new ConsumableSubscribableEvent<>();
     protected SqlConnectionConfig sqlConnectionConfig;
     protected @NotNull SqlDialect activeDialect = SqlDialect.UNDEFINED;
     protected HikariDataSource dataSource;
@@ -96,7 +97,8 @@ public class SqlClient {
     public synchronized boolean setSqlConnectionConfig(@NotNull SqlConnectionConfig config) {
         final boolean connectionChanged = !config.isEquivalent(this.sqlConnectionConfig);
         if (connectionChanged) {
-            logger.info("DB connection configuration changed, (re)connecting.");
+            validateNewConfig(config);
+            logger.info("DB connection configuration changed, (re)connecting without draining.");
             this.sqlConnectionConfig = config;
             setupPool();
         }
@@ -145,6 +147,7 @@ public class SqlClient {
                 return pending;
             }
             logger.info("DB connection configuration changed, (re)connecting asynchronously.");
+            validateNewConfig(config);
             this.sqlConnectionConfig = config;
             future = new CompletableFuture<>();
             pendingPoolReset = future;
@@ -196,6 +199,15 @@ public class SqlClient {
     public SubscribableEvent<SqlClient> onAfterPoolResetEvent() { return onAfterPoolResetEvent; }
 
     /**
+     * Fired inside {@link #validateNewConfig} when the incoming configuration carries a different
+     * SQL dialect than the current one. Subscribers receive the incoming dialect and may throw
+     * {@link IllegalStateException} to reject the change. Not fired on initial pool construction
+     * or when the dialect is unchanged.
+     * @see #onBeforePoolResetEvent()
+     */
+    public SubscribableEvent<SqlDialect> onBeforeDialectChangeEvent() { return onBeforeDialectChangeEvent; }
+
+    /**
      * Hook called after the new pool is successfully opened, but before
      * {@link #onAfterPoolResetEvent()} fires. Subclasses should override this to perform
      * post-reset work (e.g., running migrations, invalidating repository caches) that must
@@ -203,6 +215,20 @@ public class SqlClient {
      * <p>Only called on actual pool resets, not during initial pool creation.</p>
      */
     protected void afterPoolReset() {}
+
+    /**
+     * Hook invoked when the connection configuration is about to change, before the pool is reset.
+     * The default implementation fires {@link #onBeforeDialectChangeEvent()} when the dialect differs.
+     * Subclasses may override to add further validation; they should call {@code super} first.
+     *
+     * @param newConfig The incoming configuration.
+     * @throws IllegalStateException If the configuration change should be rejected.
+     */
+    protected void validateNewConfig(@NotNull SqlConnectionConfig newConfig) {
+        if (sqlConnectionConfig != null && newConfig.dialect() != sqlConnectionConfig.dialect()) {
+            onBeforeDialectChangeEvent.accept(newConfig.dialect());
+        }
+    }
 
     /** @return The current database configuration object. */
     public @NotNull SqlConnectionConfig getSqlConnectionConfig() {

@@ -1,64 +1,67 @@
-# Graph Report - .  (2026-04-23)
+# Graph Report - .  (2026-04-24)
 
 ## Corpus Check
-- Corpus is ~45,586 words - fits in a single context window. You may not need a graph.
+- 18 files · ~0 words
+- Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 852 nodes · 2034 edges · 42 communities detected
-- Extraction: 51% EXTRACTED · 49% INFERRED · 0% AMBIGUOUS · INFERRED: 996 edges (avg confidence: 0.8)
+- 925 nodes · 2274 edges · 44 communities detected
+- Extraction: 51% EXTRACTED · 49% INFERRED · 0% AMBIGUOUS · INFERRED: 1124 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
 ## Community Hubs (Navigation)
-- [[_COMMUNITY_Repository Registry & Platform Wiring|Repository Registry & Platform Wiring]]
-- [[_COMMUNITY_Abstract Repository & Core Exceptions|Abstract Repository & Core Exceptions]]
-- [[_COMMUNITY_Utility Tests & Statement Splitting|Utility Tests & Statement Splitting]]
-- [[_COMMUNITY_Async Test Infrastructure|Async Test Infrastructure]]
-- [[_COMMUNITY_AsyncVerifier Utilities|AsyncVerifier Utilities]]
-- [[_COMMUNITY_Batch Execution Exceptions|Batch Execution Exceptions]]
-- [[_COMMUNITY_Schema Migrator & Test Fixtures|Schema Migrator & Test Fixtures]]
-- [[_COMMUNITY_Migration Loading Pipeline|Migration Loading Pipeline]]
-- [[_COMMUNITY_Repository API & Contract Tests|Repository API & Contract Tests]]
-- [[_COMMUNITY_Migration Data Models|Migration Data Models]]
-- [[_COMMUNITY_Upsert SQL & Documentation|Upsert SQL & Documentation]]
-- [[_COMMUNITY_Plugin & Resource Scanning|Plugin & Resource Scanning]]
-- [[_COMMUNITY_Functional Utilities & Resource IO|Functional Utilities & Resource IO]]
-- [[_COMMUNITY_Consumable Event System|Consumable Event System]]
-- [[_COMMUNITY_Fake Repository Impl|Fake Repository Impl]]
-- [[_COMMUNITY_MySQL Connection Config|MySQL Connection Config]]
-- [[_COMMUNITY_Object Helper Utilities|Object Helper Utilities]]
+- [[_COMMUNITY_SQL Client & Migration Core|SQL Client & Migration Core]]
+- [[_COMMUNITY_Repository Registry & Providers|Repository Registry & Providers]]
+- [[_COMMUNITY_Event System & SQL Utilities|Event System & SQL Utilities]]
+- [[_COMMUNITY_Schema Migration Pipeline|Schema Migration Pipeline]]
+- [[_COMMUNITY_Repository Base & Exceptions|Repository Base & Exceptions]]
+- [[_COMMUNITY_SQLite & Connection Config|SQLite & Connection Config]]
+- [[_COMMUNITY_Async Test Utilities|Async Test Utilities]]
+- [[_COMMUNITY_Batch Execution & Chunking|Batch Execution & Chunking]]
 - [[_COMMUNITY_Registry Test Fixtures|Registry Test Fixtures]]
-- [[_COMMUNITY_Exception Unwrapping|Exception Unwrapping]]
-- [[_COMMUNITY_ThrowingBiConsumer|ThrowingBiConsumer]]
-- [[_COMMUNITY_ThrowingConsumer|ThrowingConsumer]]
-- [[_COMMUNITY_Migration Parse Exception|Migration Parse Exception]]
-- [[_COMMUNITY_Ambiguous API Exception|Ambiguous API Exception]]
-- [[_COMMUNITY_Repo Init Exception|Repo Init Exception]]
-- [[_COMMUNITY_Repo Not Registered Exception|Repo Not Registered Exception]]
-- [[_COMMUNITY_SQL Dialect Enum|SQL Dialect Enum]]
-- [[_COMMUNITY_ExceptionalFunction|ExceptionalFunction]]
-- [[_COMMUNITY_ExceptionalSupplier|ExceptionalSupplier]]
-- [[_COMMUNITY_ThrowingBiFunction|ThrowingBiFunction]]
-- [[_COMMUNITY_SQLite & Upsert Generation|SQLite & Upsert Generation]]
-- [[_COMMUNITY_Subscribable Event Hierarchy|Subscribable Event Hierarchy]]
-- [[_COMMUNITY_Exceptional Suppliers|Exceptional Suppliers]]
-- [[_COMMUNITY_Migration Package Info|Migration Package Info]]
-- [[_COMMUNITY_Repository Package Info|Repository Package Info]]
-- [[_COMMUNITY_RepositoryApi Annotation|RepositoryApi Annotation]]
-- [[_COMMUNITY_Paper Platform Test Base|Paper Platform Test Base]]
-- [[_COMMUNITY_Platform Package Info|Platform Package Info]]
-- [[_COMMUNITY_SQL Package Info|SQL Package Info]]
-- [[_COMMUNITY_PaperTestBaseLite|PaperTestBaseLite]]
-- [[_COMMUNITY_Platform Package Sentinel|Platform Package Sentinel]]
-- [[_COMMUNITY_SQL Package Sentinel|SQL Package Sentinel]]
-- [[_COMMUNITY_ObjectHelpers Singleton|ObjectHelpers Singleton]]
+- [[_COMMUNITY_Database Exception Tests|Database Exception Tests]]
+- [[_COMMUNITY_Migration File Parsing|Migration File Parsing]]
+- [[_COMMUNITY_Manager & Migrator Integration|Manager & Migrator Integration]]
+- [[_COMMUNITY_Dialect Annotation & SQLite Memory|Dialect Annotation & SQLite Memory]]
+- [[_COMMUNITY_Plugin Scanning|Plugin Scanning]]
+- [[_COMMUNITY_Utility Exceptions|Utility Exceptions]]
+- [[_COMMUNITY_Community 15|Community 15]]
+- [[_COMMUNITY_Community 16|Community 16]]
+- [[_COMMUNITY_Community 17|Community 17]]
+- [[_COMMUNITY_Community 18|Community 18]]
+- [[_COMMUNITY_Community 19|Community 19]]
+- [[_COMMUNITY_Community 20|Community 20]]
+- [[_COMMUNITY_Community 21|Community 21]]
+- [[_COMMUNITY_Community 22|Community 22]]
+- [[_COMMUNITY_Community 23|Community 23]]
+- [[_COMMUNITY_Community 24|Community 24]]
+- [[_COMMUNITY_Community 25|Community 25]]
+- [[_COMMUNITY_Community 26|Community 26]]
+- [[_COMMUNITY_Community 27|Community 27]]
+- [[_COMMUNITY_Community 28|Community 28]]
+- [[_COMMUNITY_Community 29|Community 29]]
+- [[_COMMUNITY_Community 30|Community 30]]
+- [[_COMMUNITY_Community 31|Community 31]]
+- [[_COMMUNITY_Community 32|Community 32]]
+- [[_COMMUNITY_Community 33|Community 33]]
+- [[_COMMUNITY_Community 34|Community 34]]
+- [[_COMMUNITY_Community 35|Community 35]]
+- [[_COMMUNITY_Community 36|Community 36]]
+- [[_COMMUNITY_Community 37|Community 37]]
+- [[_COMMUNITY_Community 38|Community 38]]
+- [[_COMMUNITY_Community 39|Community 39]]
+- [[_COMMUNITY_Community 40|Community 40]]
+- [[_COMMUNITY_Community 41|Community 41]]
+- [[_COMMUNITY_Community 42|Community 42]]
+- [[_COMMUNITY_Community 43|Community 43]]
 
 ## God Nodes (most connected - your core abstractions)
-1. `SqlClient` - 41 edges
+1. `SqlClient` - 43 edges
 2. `of()` - 40 edges
 3. `RepositoryRegistryTest` - 33 edges
 4. `OneShotConsumableSubscribableEventTest` - 33 edges
-5. `executeBatch()` - 32 edges
-6. `RepositoryRegistry` - 30 edges
+5. `RepositoryRegistry` - 32 edges
+6. `executeBatch()` - 32 edges
 7. `ExecutorLimiter` - 24 edges
 8. `commit()` - 23 edges
 9. `rollback()` - 22 edges
@@ -67,12 +70,12 @@
 ## Surprising Connections (you probably didn't know these)
 - `SqlConnectionConfigTest` --references--> `SqlClient Usage Pattern`  [INFERRED]
   dbm-sql\src\test\java\io\github\ensgijs\dbm\sql\SqlConnectionConfigTest.java → README.md
+- `SqlClient` --semantically_similar_to--> `SqlDatabaseManager`  [INFERRED] [semantically similar]
+  dbm-sql\src\main\java\io\github\ensgijs\dbm\sql\SqlClient.java → dbm-core\src\main\java\io\github\ensgijs\dbm\sql\SqlDatabaseManager.java
 - `RepositoryContractTest` --semantically_similar_to--> `RepositoryRegistryTest`  [INFERRED] [semantically similar]
   dbm-core\src\test\java\io\github\ensgijs\dbm\repository\RepositoryContractTest.java → dbm-core\src\test\java\io\github\ensgijs\dbm\repository\RepositoryRegistryTest.java
 - `ChunkedBatchExecutionException` --semantically_similar_to--> `DatabaseException`  [INFERRED] [semantically similar]
   dbm-sql\src\main\java\io\github\ensgijs\dbm\sql\ChunkedBatchExecutionException.java → dbm-sql\src\main\java\io\github\ensgijs\dbm\sql\DatabaseException.java
-- `DatabaseExceptionTest` --conceptually_related_to--> `SqlClient Usage Pattern`  [INFERRED]
-  dbm-sql\src\test\java\io\github\ensgijs\dbm\sql\DatabaseExceptionTest.java → README.md
 - `SqlClientTest` --references--> `SqlClient Usage Pattern`  [INFERRED]
   dbm-sql\src\test\java\io\github\ensgijs\dbm\sql\SqlClientTest.java → README.md
 
@@ -92,214 +95,224 @@
 
 ## Communities
 
-### Community 0 - "Repository Registry & Platform Wiring"
-Cohesion: 0.03
-Nodes (38): ConflictMode, PlatformHandle, RegistrationOptions, RepositoryComposition, RegistrationBootstrappingContext, RegistrationHelper, RegistrationOptions, RepositoryRegistry (+30 more)
-
-### Community 1 - "Abstract Repository & Core Exceptions"
+### Community 0 - "SQL Client & Migration Core"
 Cohesion: 0.04
-Nodes (22): AbstractRepository, DatabaseException, ExecutionContext, FakeRepository, FakeRepositoryImpl, Migration(), MigrationSortTest, MySqlConnectionConfig (+14 more)
+Nodes (24): FakeProgrammaticMigration, MigrationProvider, SchemaMigrator, MigrateTests, SqlClient, InitializationTests, SetSqlConnectionConfigTests, ShutdownTests (+16 more)
 
-### Community 2 - "Utility Tests & Statement Splitting"
-Cohesion: 0.06
-Nodes (10): ConsumableSubscribableEventTest, sort(), MigrationSortTest, OneShotConsumableSubscribableEvent, OneShotConsumableSubscribableEventTest, SqlStatementSplitter, StatementSplitException, SqlStatementSplitterTest (+2 more)
-
-### Community 3 - "Async Test Infrastructure"
+### Community 1 - "Repository Registry & Providers"
 Cohesion: 0.05
-Nodes (12): DatabaseExceptionTest, MySqlTests, SqlConnectionConfigTest, SqliteTests, configurePool(), getDbUrl(), isEquivalent(), maxConnections() (+4 more)
+Nodes (17): ConflictMode, PlatformHandle, RegistrationOptions, RepositoryComposition, RegistrationBootstrappingContext, RegistrationHelper, RegistrationOptions, RepositoryRegistry (+9 more)
 
-### Community 4 - "AsyncVerifier Utilities"
+### Community 2 - "Event System & SQL Utilities"
+Cohesion: 0.07
+Nodes (8): ConsumableSubscribableEventTest, OneShotConsumableSubscribableEvent, OneShotConsumableSubscribableEventTest, SqlStatementSplitter, StatementSplitException, SqlStatementSplitterTest, SubscribableEvent, ThrowingSupplier
+
+### Community 3 - "Schema Migration Pipeline"
+Cohesion: 0.06
+Nodes (16): MigrationSource, ProgrammaticMigration, sort(), sourceType(), toString(), version(), MigrationLoader, of() (+8 more)
+
+### Community 4 - "Repository Base & Exceptions"
+Cohesion: 0.04
+Nodes (28): AbstractRepository, DatabaseException, ExecutionContext, FakeRepository, FakeRepositoryImpl, Migration(), MigrationSortTest, Repository (+20 more)
+
+### Community 5 - "SQLite & Connection Config"
+Cohesion: 0.07
+Nodes (10): MySqlTests, SqlConnectionConfigTest, SqliteTests, configurePool(), getDbUrl(), isEquivalent(), maxConnections(), RetrievalException (+2 more)
+
+### Community 6 - "Async Test Utilities"
 Cohesion: 0.05
 Nodes (9): AsyncVerifier, TestFailure, BlockingTestRunnable, ExecutorLimiter, LimiterRunnableWrapper, ExecutorLimiterTest, LimitedVirtualThreadPerTaskExecutor, OneShotCondition (+1 more)
 
-### Community 5 - "Batch Execution Exceptions"
+### Community 7 - "Batch Execution & Chunking"
 Cohesion: 0.1
 Nodes (16): ChunkedBatchExecutionException, commit(), executeBatch(), executeChunkedBatch(), executeQuery(), executeUpdate(), prepare(), rollback() (+8 more)
 
-### Community 6 - "Schema Migrator & Test Fixtures"
-Cohesion: 0.06
-Nodes (15): FakeProgrammaticMigration, AnnotatedConcreteClass, MigrationProvider, SchemaMigrator, BaseRepo, EmptyAnnotRepo, MigrateTests, MissingAnnotRepo (+7 more)
+### Community 8 - "Registry Test Fixtures"
+Cohesion: 0.05
+Nodes (25): AbstractBaseLogic, AbstractMidLevel, AltFakeRepoImpl, BaseLogic, BaseLogicImpl, CircularDependencyTests, DeepChainImpl, DirectLogic (+17 more)
 
-### Community 7 - "Migration Loading Pipeline"
-Cohesion: 0.07
-Nodes (12): MigrationSource, ProgrammaticMigration, sourceType(), toString(), version(), MigrationLoader, of(), LoadedResourcesTests (+4 more)
+### Community 9 - "Database Exception Tests"
+Cohesion: 0.08
+Nodes (12): DatabaseExceptionTest, dbm-core Module, dbm-eternal Project README, dbm-sql Module, Migration File Naming Convention, Multi-Platform Design Intent, Repository Pattern, SqlClient Usage Pattern (+4 more)
 
-### Community 8 - "Repository API & Contract Tests"
-Cohesion: 0.06
-Nodes (17): Repository, ChildApi, ChildImpl, CollectMigrationNamesTest, DualApiImpl, IdentifyRepositoryApiTest, IndirectApi, ItemRepo (+9 more)
-
-### Community 9 - "Migration Data Models"
+### Community 10 - "Migration File Parsing"
 Cohesion: 0.14
 Nodes (31): Migration, MigrationLoader, MigrationLoader.MigrationFileParseResult, MigrationLoader.ParsedMigrationFileName, MigrationParseException, Migration.JavaSource, Migration.Key, Migration.MigrationSource (+23 more)
 
-### Community 10 - "Upsert SQL & Documentation"
-Cohesion: 0.13
-Nodes (11): dbm-core Module, dbm-eternal Project README, dbm-sql Module, Migration File Naming Convention, Multi-Platform Design Intent, Repository Pattern, SqlClient Usage Pattern, UpsertStatement Usage (+3 more)
+### Community 11 - "Manager & Migrator Integration"
+Cohesion: 0.09
+Nodes (8): MySqlConnectionConfig, BaseRepo, EmptyAnnotRepo, MissingAnnotRepo, SchemaMigratorTest, SqlConnectionConfig, SqlDatabaseManager, SqlDatabaseManagerTest
 
-### Community 11 - "Plugin & Resource Scanning"
-Cohesion: 0.24
+### Community 12 - "Dialect Annotation & SQLite Memory"
+Cohesion: 0.11
+Nodes (11): DuplicateDialect, MultiDialect, NoAnnotation, RepositoryImplTest, SqliteOnly, WithUndefined, configurePool(), getDbUrl() (+3 more)
+
+### Community 13 - "Plugin Scanning"
+Cohesion: 0.23
 Nodes (4): RepositoryRegistryScanTest, asReader(), asStream(), ResourceScanner
 
-### Community 12 - "Functional Utilities & Resource IO"
+### Community 14 - "Utility Exceptions"
 Cohesion: 0.21
 Nodes (12): BubbleUpException, ExceptionalFunction Interface, ResourceEntry Record, ResourceScanner Utility, SqlStatementSplitter Utility, StatementSplitException, ChunkedBatchExecutionException, StatementExecutor Record (+4 more)
 
-### Community 13 - "Consumable Event System"
+### Community 15 - "Community 15"
 Cohesion: 0.31
 Nodes (1): ConsumableSubscribableEvent
 
-### Community 14 - "Fake Repository Impl"
+### Community 16 - "Community 16"
 Cohesion: 0.29
 Nodes (1): FakeRepositoryImpl
 
-### Community 15 - "MySQL Connection Config"
+### Community 17 - "Community 17"
 Cohesion: 0.33
 Nodes (2): configurePool(), getDbUrl()
 
-### Community 16 - "Object Helper Utilities"
+### Community 18 - "Community 18"
 Cohesion: 0.33
 Nodes (1): ObjectHelpers
 
-### Community 17 - "Registry Test Fixtures"
-Cohesion: 0.5
-Nodes (1): FakeRepoImpl
-
-### Community 18 - "Exception Unwrapping"
+### Community 19 - "Community 19"
 Cohesion: 0.5
 Nodes (1): BubbleUpException
 
-### Community 19 - "ThrowingBiConsumer"
+### Community 20 - "Community 20"
 Cohesion: 0.67
 Nodes (1): ThrowingBiConsumer
 
-### Community 20 - "ThrowingConsumer"
+### Community 21 - "Community 21"
 Cohesion: 0.67
 Nodes (1): ThrowingConsumer
 
-### Community 21 - "Migration Parse Exception"
+### Community 22 - "Community 22"
 Cohesion: 0.67
 Nodes (1): MigrationParseException
 
-### Community 22 - "Ambiguous API Exception"
+### Community 23 - "Community 23"
 Cohesion: 0.67
 Nodes (1): AmbiguousRepositoryApiException
 
-### Community 23 - "Repo Init Exception"
+### Community 24 - "Community 24"
 Cohesion: 0.67
 Nodes (1): RepositoryInitializationException
 
-### Community 24 - "Repo Not Registered Exception"
+### Community 25 - "Community 25"
 Cohesion: 0.67
 Nodes (1): RepositoryNotRegisteredException
 
-### Community 25 - "SQL Dialect Enum"
+### Community 26 - "Community 26"
 Cohesion: 0.67
 Nodes (0): 
 
-### Community 26 - "ExceptionalFunction"
+### Community 27 - "Community 27"
 Cohesion: 0.67
 Nodes (1): ExceptionalFunction
 
-### Community 27 - "ExceptionalSupplier"
+### Community 28 - "Community 28"
 Cohesion: 0.67
 Nodes (1): ExceptionalSupplier
 
-### Community 28 - "ThrowingBiFunction"
+### Community 29 - "Community 29"
 Cohesion: 0.67
 Nodes (1): ThrowingBiFunction
 
-### Community 29 - "SQLite & Upsert Generation"
+### Community 30 - "Community 30"
 Cohesion: 0.67
 Nodes (3): SqlDialect Enum, SqliteConnectionConfig Record, UpsertStatement Builder
 
-### Community 30 - "Subscribable Event Hierarchy"
+### Community 31 - "Community 31"
 Cohesion: 1.0
 Nodes (3): ConsumableSubscribableEvent, OneShotConsumableSubscribableEvent, SubscribableEvent Interface
 
-### Community 31 - "Exceptional Suppliers"
+### Community 32 - "Community 32"
 Cohesion: 1.0
 Nodes (2): ExceptionalSupplier Interface, ThrowingSupplier Interface
 
-### Community 32 - "Migration Package Info"
+### Community 33 - "Community 33"
 Cohesion: 1.0
 Nodes (0): 
 
-### Community 33 - "Repository Package Info"
+### Community 34 - "Community 34"
 Cohesion: 1.0
 Nodes (0): 
 
-### Community 34 - "RepositoryApi Annotation"
+### Community 35 - "Community 35"
 Cohesion: 1.0
 Nodes (0): 
 
-### Community 35 - "Paper Platform Test Base"
+### Community 36 - "Community 36"
 Cohesion: 1.0
 Nodes (0): 
 
-### Community 36 - "Platform Package Info"
+### Community 37 - "Community 37"
 Cohesion: 1.0
 Nodes (0): 
 
-### Community 37 - "SQL Package Info"
+### Community 38 - "Community 38"
 Cohesion: 1.0
 Nodes (0): 
 
-### Community 38 - "PaperTestBaseLite"
+### Community 39 - "Community 39"
 Cohesion: 1.0
 Nodes (1): PaperTestBaseLite (commented out)
 
-### Community 39 - "Platform Package Sentinel"
+### Community 40 - "Community 40"
 Cohesion: 1.0
 Nodes (1): Platform Package (dbm-sql)
 
-### Community 40 - "SQL Package Sentinel"
+### Community 41 - "Community 41"
 Cohesion: 1.0
 Nodes (1): SQL Package (dbm-sql)
 
-### Community 41 - "ObjectHelpers Singleton"
+### Community 42 - "Community 42"
 Cohesion: 1.0
 Nodes (1): ObjectHelpers Utility
 
+### Community 43 - "Community 43"
+Cohesion: 1.0
+Nodes (0): 
+
 ## Knowledge Gaps
-- **38 isolated node(s):** `BaseRepo`, `MissingAnnotRepo`, `EmptyAnnotRepo`, `ItemRepo`, `OrderRepo` (+33 more)
+- **43 isolated node(s):** `BaseRepo`, `MissingAnnotRepo`, `EmptyAnnotRepo`, `ItemRepo`, `OrderRepo` (+38 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **Thin community `Exceptional Suppliers`** (2 nodes): `ExceptionalSupplier Interface`, `ThrowingSupplier Interface`
+- **Thin community `Community 32`** (2 nodes): `ExceptionalSupplier Interface`, `ThrowingSupplier Interface`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Migration Package Info`** (1 nodes): `package-info.java`
+- **Thin community `Community 33`** (1 nodes): `package-info.java`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Repository Package Info`** (1 nodes): `package-info.java`
+- **Thin community `Community 34`** (1 nodes): `package-info.java`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `RepositoryApi Annotation`** (1 nodes): `RepositoryApi.java`
+- **Thin community `Community 35`** (1 nodes): `RepositoryApi.java`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Paper Platform Test Base`** (1 nodes): `PaperTestBaseLite.java`
+- **Thin community `Community 36`** (1 nodes): `PaperTestBaseLite.java`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Platform Package Info`** (1 nodes): `package-info.java`
+- **Thin community `Community 37`** (1 nodes): `package-info.java`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `SQL Package Info`** (1 nodes): `package-info.java`
+- **Thin community `Community 38`** (1 nodes): `package-info.java`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `PaperTestBaseLite`** (1 nodes): `PaperTestBaseLite (commented out)`
+- **Thin community `Community 39`** (1 nodes): `PaperTestBaseLite (commented out)`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Platform Package Sentinel`** (1 nodes): `Platform Package (dbm-sql)`
+- **Thin community `Community 40`** (1 nodes): `Platform Package (dbm-sql)`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `SQL Package Sentinel`** (1 nodes): `SQL Package (dbm-sql)`
+- **Thin community `Community 41`** (1 nodes): `SQL Package (dbm-sql)`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `ObjectHelpers Singleton`** (1 nodes): `ObjectHelpers Utility`
+- **Thin community `Community 42`** (1 nodes): `ObjectHelpers Utility`
+  Too small to be a meaningful cluster - may be noise or needs more connections extracted.
+- **Thin community `Community 43`** (1 nodes): `RepositoryImpl.java`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `RepositoryRegistryTest` connect `Repository Registry & Platform Wiring` to `Abstract Repository & Core Exceptions`?**
-  _High betweenness centrality (0.087) - this node is a cross-community bridge._
-- **Why does `SqlClient` connect `Abstract Repository & Core Exceptions` to `Repository Registry & Platform Wiring`, `Batch Execution Exceptions`, `Schema Migrator & Test Fixtures`?**
+- **Why does `RepositoryRegistryTest` connect `Repository Registry & Providers` to `Registry Test Fixtures`, `Manager & Migrator Integration`, `Repository Base & Exceptions`?**
+  _High betweenness centrality (0.084) - this node is a cross-community bridge._
+- **Why does `SqlClient` connect `SQL Client & Migration Core` to `Repository Registry & Providers`, `Schema Migration Pipeline`, `Repository Base & Exceptions`, `Batch Execution & Chunking`, `Manager & Migrator Integration`?**
   _High betweenness centrality (0.064) - this node is a cross-community bridge._
-- **Why does `of()` connect `Migration Loading Pipeline` to `Repository Registry & Platform Wiring`, `Abstract Repository & Core Exceptions`, `Utility Tests & Statement Splitting`, `Async Test Infrastructure`, `Batch Execution Exceptions`, `Schema Migrator & Test Fixtures`, `Repository API & Contract Tests`, `Plugin & Resource Scanning`?**
-  _High betweenness centrality (0.047) - this node is a cross-community bridge._
+- **Why does `of()` connect `Schema Migration Pipeline` to `SQL Client & Migration Core`, `Repository Registry & Providers`, `Event System & SQL Utilities`, `Repository Base & Exceptions`, `Batch Execution & Chunking`, `Plugin Scanning`?**
+  _High betweenness centrality (0.042) - this node is a cross-community bridge._
 - **Are the 2 inferred relationships involving `SqlClient` (e.g. with `SqlDatabaseManager` and `MySqlConnectionConfig`) actually correct?**
   _`SqlClient` has 2 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 39 inferred relationships involving `of()` (e.g. with `.find()` and `.testFileNameParsingSql_HappyCase_MySql_ForwardSlashes()`) actually correct?**
   _`of()` has 39 INFERRED edges - model-reasoned connections that need verification._
-- **Are the 29 inferred relationships involving `executeBatch()` (e.g. with `.getConnection()` and `commit()`) actually correct?**
-  _`executeBatch()` has 29 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `BaseRepo`, `MissingAnnotRepo`, `EmptyAnnotRepo` to the rest of the system?**
-  _38 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _43 weakly-connected nodes found - possible documentation gaps or missing edges._
+- **Should `SQL Client & Migration Core` be split into smaller, more focused modules?**
+  _Cohesion score 0.04 - nodes in this community are weakly interconnected._

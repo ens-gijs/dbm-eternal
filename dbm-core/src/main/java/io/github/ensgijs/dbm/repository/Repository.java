@@ -1,5 +1,6 @@
 package io.github.ensgijs.dbm.repository;
 
+import io.github.ensgijs.dbm.sql.SqlDialect;
 import io.github.ensgijs.dbm.util.objects.SubscribableEvent;
 import org.jetbrains.annotations.NotNull;
 
@@ -125,5 +126,39 @@ public interface Repository {
         return Arrays.stream(annot.value())
                 .filter(s -> s != null && !s.isBlank())
                 .toList();
+    }
+
+    /**
+     * Returns the set of dialects declared by {@link RepositoryImpl @RepositoryImpl} on {@code implClass}.
+     *
+     * @throws IllegalStateException If the annotation is missing, the dialects array is empty,
+     *                               or the array contains {@link SqlDialect#UNDEFINED}.
+     */
+    static Set<SqlDialect> supportedDialectsOf(Class<?> implClass) {
+        RepositoryImpl annot = implClass.getAnnotation(RepositoryImpl.class);
+        if (annot == null || annot.dialects().length == 0) {
+            throw new IllegalStateException(
+                    implClass.getName() + " must be annotated with @RepositoryImpl declaring at least one dialect.");
+        }
+        EnumSet<SqlDialect> set = EnumSet.copyOf(Arrays.asList(annot.dialects()));
+        if (set.contains(SqlDialect.UNDEFINED)) {
+            throw new IllegalStateException(
+                    implClass.getName() + " declares @RepositoryImpl with SqlDialect.UNDEFINED, which is not allowed.");
+        }
+        return set;
+    }
+
+    /**
+     * Returns {@code true} if {@code implClass} declares support for {@code active} via
+     * {@link RepositoryImpl @RepositoryImpl}.
+     *
+     * @throws IllegalArgumentException If {@code active} is {@link SqlDialect#UNDEFINED}.
+     * @throws IllegalStateException    If {@code implClass} has a missing or invalid {@code @RepositoryImpl}.
+     */
+    static boolean supportsDialect(Class<?> implClass, @NotNull SqlDialect active) {
+        if (active == SqlDialect.UNDEFINED) {
+            throw new IllegalArgumentException("active dialect must not be UNDEFINED");
+        }
+        return supportedDialectsOf(implClass).contains(active);
     }
 }

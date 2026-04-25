@@ -14,6 +14,8 @@ import org.jetbrains.annotations.Nullable;
 import org.jetbrains.annotations.VisibleForTesting;
 
 import java.util.Iterator;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
@@ -66,6 +68,29 @@ public class SqlDatabaseManager extends SqlClient {
     ) {
         super(platformHandle, config, hikariCreator);
         this.migrator = migrator != null ? migrator : new SchemaMigrator(this);
+    }
+
+    @Override
+    protected void validateNewConfig(@NotNull SqlConnectionConfig newConfig) {
+        super.validateNewConfig(newConfig); // fires onBeforeDialectChangeEvent if dialect changes
+        if (sqlConnectionConfig == null || newConfig.dialect() == sqlConnectionConfig.dialect()) return;
+        SqlDialect newDialect = newConfig.dialect();
+        List<String> errors = new ArrayList<>();
+        repositoryCache.forEach((api, voe) -> {
+            if (!voe.hasValue()) return;
+            Class<?> implClass = voe.getValue().getClass();
+            try {
+                if (!Repository.supportsDialect(implClass, newDialect)) {
+                    errors.add(api.getSimpleName() + " -> " + implClass.getSimpleName());
+                }
+            } catch (IllegalStateException ex) {
+                errors.add(api.getSimpleName() + ": " + ex.getMessage());
+            }
+        });
+        if (!errors.isEmpty()) {
+            throw new IllegalStateException("Cannot change dialect to " + newDialect
+                    + ": cached repositories do not support it: " + String.join(", ", errors));
+        }
     }
 
     /**
