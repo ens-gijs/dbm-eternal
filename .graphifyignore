@@ -1,4 +1,5 @@
-AGENTS.md          # graphify install files — don't extract your own instructions as knowledge
+# Tip: don't extract your own instructions as knowledge
+AGENTS.md
 CLAUDE.md
 GEMINI.md
 .gemini/
