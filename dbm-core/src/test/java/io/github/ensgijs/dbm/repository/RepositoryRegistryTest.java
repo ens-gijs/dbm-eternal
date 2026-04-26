@@ -1,5 +1,6 @@
 package io.github.ensgijs.dbm.repository;
 
+import io.github.ensgijs.dbm.migration.MigrationParseException;
 import io.github.ensgijs.dbm.platform.PlatformHandle;
 import io.github.ensgijs.dbm.platform.SimplePlatformHandle;
 import io.github.ensgijs.dbm.sql.SqlClient;
@@ -83,6 +84,19 @@ public class RepositoryRegistryTest {
         return new SimplePlatformHandle(name, List.of(deps));
     }
 
+    /**
+     * Test helper: routes registration through {@code register(pluginA, this).onConfigure(...)}, the
+     * sole supported entry point. Tests still call {@code registry.closeRegistration()} explicitly so
+     * they retain control over {@link RegistrationOptions} and timing assertions.
+     */
+    protected void configure(ThrowingConsumer<RegistrationBootstrappingContext> body) {
+        try {
+            registry.register(pluginA, this).onConfigure(body);
+        } catch (MigrationParseException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     @BeforeEach
     protected void setUp() {
         mockResourceWalker = mock(ResourceWalker.class);
@@ -104,16 +118,19 @@ public class RepositoryRegistryTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("EXCLUSIVE publish: second publish for same api throws immediately")
-    void testPublishExclusiveConflict() {
+    @DisplayName("EXCLUSIVE publish: second publish for same api throws inside onConfigure")
+    void testPublishExclusiveConflict() throws Exception {
         SqlDatabaseManager manager2 = mock(SqlDatabaseManager.class);
         SqlConnectionConfig cfg2 = mock(SqlConnectionConfig.class);
         when(cfg2.connectionId()).thenReturn("db2");
         when(manager2.getSqlConnectionConfig()).thenReturn(cfg2);
 
-        registry.publish(FakeRepo.class, mockManager);
-        assertThrows(RepositoryInitializationException.class,
-                () -> registry.publish(FakeRepo.class, manager2));
+        configure(ctx -> {
+            ctx.publish(FakeRepo.class, mockManager);
+            assertThrows(RepositoryInitializationException.class,
+                    () -> ctx.publish(FakeRepo.class, manager2));
+        });
+        registry.closeRegistration().get(1, TimeUnit.SECONDS);
     }
 
     @Test
@@ -121,8 +138,10 @@ public class RepositoryRegistryTest {
     void testPublishContest() throws Exception {
         SqlDatabaseManager manager2 = mock(SqlDatabaseManager.class);
 
-        registry.publish(FakeRepo.class, mockManager, ConflictMode.CONTEST);
-        registry.publish(FakeRepo.class, manager2, ConflictMode.CONTEST);
+        configure(ctx -> {
+            ctx.publish(FakeRepo.class, mockManager, ConflictMode.CONTEST);
+            ctx.publish(FakeRepo.class, manager2, ConflictMode.CONTEST);
+        });
 
         var future = registry.closeRegistration(RegistrationOptions.empty().providerResolver((api, managers) -> manager2));
         assertTrue(future.get(1, TimeUnit.SECONDS));
@@ -132,36 +151,32 @@ public class RepositoryRegistryTest {
 
     @Test
     @DisplayName("CONTEST publish: null conflictResolver causes future to complete exceptionally")
-    void testPublishContestNullResolver() throws Exception {
+    void testPublishContestNullResolver() {
         SqlDatabaseManager manager2 = mock(SqlDatabaseManager.class);
-        registry.publish(FakeRepo.class, mockManager, ConflictMode.CONTEST);
-        registry.publish(FakeRepo.class, manager2, ConflictMode.CONTEST);
+        configure(ctx -> {
+            ctx.publish(FakeRepo.class, mockManager, ConflictMode.CONTEST);
+            ctx.publish(FakeRepo.class, manager2, ConflictMode.CONTEST);
+        });
 
         var future = registry.closeRegistration();
         assertThrows(ExecutionException.class, () -> future.get(1, TimeUnit.SECONDS));
     }
 
     @Test
-    @DisplayName("publish after registration closed throws IllegalStateException")
-    void testPublishAfterCloseThrows() {
-        registry.closeRegistration();
-        assertThrows(IllegalStateException.class,
-                () -> registry.publish(FakeRepo.class, mockManager));
-    }
-
-    @Test
     @DisplayName("publish with a non-@RepositoryApi interface throws IllegalArgumentException")
-    void testPublishNonAnnotatedInterfaceThrows() {
-        assertThrows(IllegalArgumentException.class,
-                () -> registry.publish(NoMigrations.class, mockManager));
+    void testPublishNonAnnotatedInterfaceThrows() throws Exception {
+        configure(ctx -> assertThrows(IllegalArgumentException.class,
+                () -> ctx.publish(NoMigrations.class, mockManager)));
+        registry.closeRegistration().get(1, TimeUnit.SECONDS);
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
     @Test
     @DisplayName("publish with a concrete class (not interface) throws IllegalArgumentException")
-    void testPublishNonInterfaceThrows() {
-        assertThrows(IllegalArgumentException.class,
-                () -> registry.publish((Class) FakeRepoImpl.class, mockManager));
+    void testPublishNonInterfaceThrows() throws Exception {
+        configure(ctx -> assertThrows(IllegalArgumentException.class,
+                () -> ctx.publish((Class) FakeRepoImpl.class, mockManager)));
+        registry.closeRegistration().get(1, TimeUnit.SECONDS);
     }
 
     // -----------------------------------------------------------------------
@@ -174,8 +189,10 @@ public class RepositoryRegistryTest {
         FakeRepo mockRepo = mock(FakeRepo.class);
         doReturn(mockRepo).when(mockManager).getRepository(FakeRepo.class, FakeRepoImpl.class);
 
-        registry.bindImpl(FakeRepo.class, FakeRepoImpl.class);
-        registry.publish(FakeRepo.class, mockManager);
+        configure(ctx -> {
+            ctx.bindImpl(FakeRepo.class, FakeRepoImpl.class);
+            ctx.publish(FakeRepo.class, mockManager);
+        });
         registry.closeRegistration().get(1, TimeUnit.SECONDS);
 
         assertSame(mockRepo, registry.get(FakeRepo.class));
@@ -207,8 +224,10 @@ public class RepositoryRegistryTest {
         FakeRepo mockRepo = mock(FakeRepo.class);
         doReturn(mockRepo).when(mockManager).getRepository(FakeRepo.class, FakeRepoImpl.class);
 
-        registry.bindImpl(FakeRepo.class, FakeRepoImpl.class);
-        registry.publish(FakeRepo.class, mockManager);
+        configure(ctx -> {
+            ctx.bindImpl(FakeRepo.class, FakeRepoImpl.class);
+            ctx.publish(FakeRepo.class, mockManager);
+        });
         registry.closeRegistration().get(1, TimeUnit.SECONDS);
 
         assertEquals(Optional.of(mockRepo), registry.find(FakeRepo.class));
@@ -221,8 +240,10 @@ public class RepositoryRegistryTest {
         SqlDatabaseManager otherManager = mock(SqlDatabaseManager.class);
         doReturn(mockRepo).when(mockManager).getRepository(FakeRepo.class, FakeRepoImpl.class);
 
-        registry.bindImpl(FakeRepo.class, FakeRepoImpl.class);
-        registry.publish(FakeRepo.class, mockManager);
+        configure(ctx -> {
+            ctx.bindImpl(FakeRepo.class, FakeRepoImpl.class);
+            ctx.publish(FakeRepo.class, mockManager);
+        });
         registry.closeRegistration().get(1, TimeUnit.SECONDS);
 
         assertTrue(registry.isProvidedBy(FakeRepo.class, mockManager));
@@ -235,18 +256,13 @@ public class RepositoryRegistryTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("bindImpl sets the impl binding; findImplementation returns it")
-    void testBindImpl() {
-        registry.bindImpl(FakeRepo.class, FakeRepoImpl.class);
-        assertSame(FakeRepoImpl.class, registry.getImplementationType(FakeRepo.class));
-    }
-
-    @Test
-    @DisplayName("bindImpl after close throws IllegalStateException")
-    void testBindImplAfterCloseThrows() {
-        registry.closeRegistration();
-        assertThrows(IllegalStateException.class,
-                () -> registry.bindImpl(FakeRepo.class, FakeRepoImpl.class));
+    @DisplayName("bindImpl sets the impl binding; getImplementationType returns it inside onConfigure")
+    void testBindImpl() throws Exception {
+        configure(ctx -> {
+            ctx.bindImpl(FakeRepo.class, FakeRepoImpl.class);
+            assertSame(FakeRepoImpl.class, registry.getImplementationType(FakeRepo.class));
+        });
+        registry.closeRegistration().get(1, TimeUnit.SECONDS);
     }
 
     // -----------------------------------------------------------------------
@@ -265,17 +281,102 @@ public class RepositoryRegistryTest {
 
         registry.register(plugin("MyPlugin"), this)
                 .onConfigure(c -> configure.set(ord.incrementAndGet()))
-                .onReady(r -> ready.set(ord.incrementAndGet()));
+                .onReady(r -> {
+                    assertFalse(registry.isAcceptingRegistrations());
+                    assertTrue(registry.isReady());
+                    ready.set(ord.incrementAndGet());
+                });
 
         var future = registry.closeRegistration();
-        assertFalse(registry.isAcceptingRegistrations());
-        assertTrue(registry.isReady());
 
         assertTrue(future.get(1, TimeUnit.SECONDS));
         assertEquals(1, configure.get());
         assertEquals(2, ready.get());
 
         assertFalse(registry.closeRegistration().get(1, TimeUnit.SECONDS));
+    }
+
+    @Test
+    @DisplayName("Lifecycle state transitions: ACCEPTING → CONFIGURING → RESOLVING → READY")
+    void testLifecycleStateTransitions() throws Exception {
+        assertEquals(Lifecycle.ACCEPTING, registry.lifecycleState());
+        assertTrue(registry.isAcceptingRegistrations());
+        assertFalse(registry.isReady());
+
+        AtomicReference<Lifecycle> stateInOnConfigure = new AtomicReference<>();
+        AtomicReference<Lifecycle> stateInOnReady = new AtomicReference<>();
+
+        registry.register(pluginA, this)
+                .onConfigure(ctx -> stateInOnConfigure.set(registry.lifecycleState()))
+                .onReady(r -> stateInOnReady.set(registry.lifecycleState()));
+
+        registry.closeRegistration().get(1, TimeUnit.SECONDS);
+
+        assertEquals(Lifecycle.CONFIGURING, stateInOnConfigure.get(), "onConfigure must run during CONFIGURING");
+        assertEquals(Lifecycle.READY, stateInOnReady.get(), "onReady must run during READY (queries permitted)");
+        assertEquals(Lifecycle.READY, registry.lifecycleState());
+        assertFalse(registry.isAcceptingRegistrations());
+        assertTrue(registry.isReady());
+    }
+
+    @Test
+    @DisplayName("register() during CONFIGURING throws IllegalStateException — no NPE on null pendingRegistrations")
+    void testRegisterDuringConfiguringThrows() throws Exception {
+        AtomicReference<Throwable> caught = new AtomicReference<>();
+        registry.register(pluginA, this).onConfigure(ctx -> {
+            try {
+                registry.register(plugin("LateComer"), this);
+            } catch (Throwable t) {
+                caught.set(t);
+            }
+        });
+        registry.closeRegistration().get(1, TimeUnit.SECONDS);
+
+        assertInstanceOf(IllegalStateException.class, caught.get());
+        assertTrue(caught.get().getMessage().contains("CONFIGURING"));
+    }
+
+    @Test
+    @DisplayName("RegistrationBootstrappingContext is hard-invalidated after its onConfigure callback returns")
+    void testCtxInvalidatedAfterOnConfigure() throws Exception {
+        AtomicReference<RegistrationBootstrappingContext> escaped = new AtomicReference<>();
+        registry.register(pluginA, this).onConfigure(escaped::set);
+        registry.closeRegistration().get(1, TimeUnit.SECONDS);
+
+        var ctx = escaped.get();
+        assertNotNull(ctx);
+        var ex = assertThrows(IllegalStateException.class,
+                () -> ctx.publish(FakeRepo.class, mockManager));
+        assertTrue(ex.getMessage().contains("outside of its onConfigure callback"));
+        assertThrows(IllegalStateException.class,
+                () -> ctx.bindImpl(FakeRepo.class, FakeRepoImpl.class));
+        assertThrows(IllegalStateException.class,
+                () -> ctx.registerComposition(RepositoryCompositionTest.HeavyLogic.class));
+    }
+
+    @Test
+    @DisplayName("Captured ctx is invalidated even when onConfigure throws")
+    void testCtxInvalidatedAfterOnConfigureThrows() throws Exception {
+        AtomicReference<RegistrationBootstrappingContext> escaped = new AtomicReference<>();
+        registry.register(pluginA, this).onConfigure(ctx -> {
+            escaped.set(ctx);
+            throw new RuntimeException("boom");
+        });
+        // Future completes exceptionally because onConfigure threw; we don't care about the cause here.
+        var future = registry.closeRegistration();
+        assertThrows(ExecutionException.class, () -> future.get(1, TimeUnit.SECONDS));
+
+        var ctx = escaped.get();
+        assertNotNull(ctx);
+        assertThrows(IllegalStateException.class,
+                () -> ctx.publish(FakeRepo.class, mockManager));
+    }
+
+    @Test
+    @DisplayName("Queries before READY throw with state-aware message")
+    void testQueriesRequireReadyState() {
+        var ex = assertThrows(IllegalStateException.class, () -> registry.get(FakeRepo.class));
+        assertTrue(ex.getMessage().contains("ACCEPTING"));
     }
 
     @Test
@@ -380,8 +481,8 @@ public class RepositoryRegistryTest {
 
         @Test
         @DisplayName("Scan after close throws IllegalStateException")
-        void testScanAfterCloseThrows() {
-            registry.closeRegistration();
+        void testScanAfterCloseThrows() throws Exception {
+            registry.closeRegistration().get(1, TimeUnit.SECONDS);
             assertThrows(IllegalStateException.class,
                     () -> registry.scanPlugin(pluginA, getClass().getClassLoader()));
         }
@@ -402,7 +503,7 @@ public class RepositoryRegistryTest {
             @Test
             @DisplayName("Single competitor: abstract key returns instance, concrete key throws")
             void testSingleCompetitorAbstractKeyWins() throws Exception {
-                registry.registerComposition(BaseLogicImpl.class);
+                configure(ctx -> ctx.registerComposition(BaseLogicImpl.class));
                 registry.closeRegistration().get(1, TimeUnit.SECONDS);
 
                 AbstractBaseLogic instance = registry.getCompositeRepository(AbstractBaseLogic.class);
@@ -416,8 +517,10 @@ public class RepositoryRegistryTest {
             @Test
             @DisplayName("Two competitors + conflict resolver: correct winner returned for abstract key")
             void testTwoCompetitorsWithResolver() throws Exception {
-                registry.registerComposition(BaseLogicImpl.class);
-                registry.registerComposition(EnhancedLogicImpl.class);
+                configure(ctx -> {
+                    ctx.registerComposition(BaseLogicImpl.class);
+                    ctx.registerComposition(EnhancedLogicImpl.class);
+                });
                 registry.closeRegistration(RegistrationOptions.empty().compositionResolver((abstractKey, competitors) -> EnhancedLogicImpl.class))
                         .get(1, TimeUnit.SECONDS);
 
@@ -428,9 +531,11 @@ public class RepositoryRegistryTest {
 
             @Test
             @DisplayName("Two competitors + no resolver: closeRegistration future completes exceptionally")
-            void testTwoCompetitorsNoResolverThrows() throws Exception {
-                registry.registerComposition(BaseLogicImpl.class);
-                registry.registerComposition(EnhancedLogicImpl.class);
+            void testTwoCompetitorsNoResolverThrows() {
+                configure(ctx -> {
+                    ctx.registerComposition(BaseLogicImpl.class);
+                    ctx.registerComposition(EnhancedLogicImpl.class);
+                });
 
                 var future = registry.closeRegistration();
                 assertThrows(ExecutionException.class, () -> future.get(1, TimeUnit.SECONDS));
@@ -438,16 +543,18 @@ public class RepositoryRegistryTest {
 
             @Test
             @DisplayName("Registering a concrete that extends a concrete composition throws IllegalArgumentException")
-            void testExtendingConcreteCompositionThrows() {
-                assertThrows(IllegalArgumentException.class,
-                        () -> registry.registerComposition(DirectLogicSubclass.class));
+            void testExtendingConcreteCompositionThrows() throws Exception {
+                configure(ctx -> assertThrows(IllegalArgumentException.class,
+                        () -> ctx.registerComposition(DirectLogicSubclass.class)));
+                registry.closeRegistration().get(1, TimeUnit.SECONDS);
             }
 
             @Test
             @DisplayName("Registering a concrete with chain deeper than one abstract throws IllegalArgumentException")
-            void testDeepAbstractChainThrows() {
-                assertThrows(IllegalArgumentException.class,
-                        () -> registry.registerComposition(DeepChainImpl.class));
+            void testDeepAbstractChainThrows() throws Exception {
+                configure(ctx -> assertThrows(IllegalArgumentException.class,
+                        () -> ctx.registerComposition(DeepChainImpl.class)));
+                registry.closeRegistration().get(1, TimeUnit.SECONDS);
             }
         }
 
@@ -473,7 +580,7 @@ public class RepositoryRegistryTest {
                 DirectLogic registered = new DirectLogic() {
                     @Override public String toString() { return "RegisteredInstance"; }
                 };
-                registry.registerComposition(DirectLogic.class, reg -> registered);
+                configure(ctx -> ctx.registerComposition(DirectLogic.class, reg -> registered));
                 registry.closeRegistration().get(1, TimeUnit.SECONDS);
 
                 DirectLogic fallback = new DirectLogic() {
@@ -490,11 +597,11 @@ public class RepositoryRegistryTest {
         class LazyInitializationTests {
 
             @Test
-            void testLazyInstantiation() {
-                registry.registerComposition(HeavyLogic.class);
+            void testLazyInstantiation() throws Exception {
+                configure(ctx -> ctx.registerComposition(HeavyLogic.class));
                 HeavyLogic.instantiationCount.set(0);
                 HeavyLogic.initCount.set(0);
-                registry.closeRegistration();
+                registry.closeRegistration().get(1, TimeUnit.SECONDS);
 
                 assertEquals(0, HeavyLogic.instantiationCount.get());
 
@@ -506,11 +613,11 @@ public class RepositoryRegistryTest {
             }
 
             @Test
-            void testCustomCreator() {
-                registry.registerComposition(BaseLogic.class, reg -> new BaseLogic() {
+            void testCustomCreator() throws Exception {
+                configure(ctx -> ctx.registerComposition(BaseLogic.class, reg -> new BaseLogic() {
                     @Override public String toString() { return "CustomInstance"; }
-                });
-                registry.closeRegistration();
+                }));
+                registry.closeRegistration().get(1, TimeUnit.SECONDS);
 
                 assertEquals("CustomInstance", registry.getCompositeRepository(BaseLogic.class).toString());
             }
@@ -521,8 +628,8 @@ public class RepositoryRegistryTest {
         class CircularDependencyTests {
 
             @Test
-            void testSafeCircularReference() {
-                registry.closeRegistration();
+            void testSafeCircularReference() throws Exception {
+                registry.closeRegistration().get(1, TimeUnit.SECONDS);
 
                 ServiceA a = registry.getCompositeRepository(ServiceA.class);
                 ServiceB b = registry.getCompositeRepository(ServiceB.class);
@@ -542,8 +649,10 @@ public class RepositoryRegistryTest {
                 FakeRepoImpl realRepo = new FakeRepoImpl(mock(SqlClient.class));
                 doReturn(realRepo).when(mockManager).getRepository(FakeRepo.class, FakeRepoImpl.class);
 
-                registry.bindImpl(FakeRepo.class, FakeRepoImpl.class);
-                registry.publish(FakeRepo.class, mockManager);
+                configure(ctx -> {
+                    ctx.bindImpl(FakeRepo.class, FakeRepoImpl.class);
+                    ctx.publish(FakeRepo.class, mockManager);
+                });
                 registry.closeRegistration().get(1, TimeUnit.SECONDS);
 
                 StatsComposite stats = registry.getCompositeRepository(StatsComposite.class);
@@ -625,11 +734,6 @@ public class RepositoryRegistryTest {
         }
     }
 
-    /** Publishes mockManager as EXCLUSIVE provider for the given api (test brevity helper). */
-    private void publish(Class<? extends Repository> api) throws RepositoryInitializationException {
-        registry.publish(api, mockManager);
-    }
-
     @Nested
     class BindingConflictTests {
 
@@ -651,13 +755,16 @@ public class RepositoryRegistryTest {
         }
 
         @Test
-        void exclusive_exclusive_throwsAtRegistration() throws Exception {
+        void exclusive_exclusive_throwsInOnConfigure() throws Exception {
             registry = new RepositoryRegistry(mockResourceWalker);
             pluginA = plugin("A");
-            registry.register(pluginA, getClass().getClassLoader());
-            registry.bindImpl(FakeRepo.class, FakeRepoImpl.class); // first EXCLUSIVE
-            assertThrows(RepositoryInitializationException.class,
-                    () -> registry.bindImpl(FakeRepo.class, AltFakeRepoImpl.class)); // second EXCLUSIVE
+            registry.register(pluginA, getClass().getClassLoader())
+                    .onConfigure(ctx -> {
+                        ctx.bindImpl(FakeRepo.class, FakeRepoImpl.class); // first EXCLUSIVE
+                        assertThrows(RepositoryInitializationException.class,
+                                () -> ctx.bindImpl(FakeRepo.class, AltFakeRepoImpl.class)); // second EXCLUSIVE
+                    });
+            registry.closeRegistration().get(2, TimeUnit.SECONDS);
         }
 
         @Test
@@ -669,10 +776,12 @@ public class RepositoryRegistryTest {
             };
             registry = new RepositoryRegistry(walker);
             pluginA = plugin("A");
-            registry.register(pluginA, getClass().getClassLoader());
-            registry.bindImpl(FakeRepo.class, FakeRepoImpl.class); // EXCLUSIVE wins
+            registry.register(pluginA, getClass().getClassLoader())
+                    .onConfigure(ctx -> {
+                        ctx.bindImpl(FakeRepo.class, FakeRepoImpl.class); // EXCLUSIVE wins
+                        ctx.publish(FakeRepo.class, mockManager);
+                    });
 
-            publish(FakeRepo.class);
             var future = registry.closeRegistration();
             future.get(2, TimeUnit.SECONDS);
             assertEquals(FakeRepoImpl.class, registry.getImplementationType(FakeRepo.class));
@@ -682,11 +791,13 @@ public class RepositoryRegistryTest {
         void exclusive_displaces_contest_with_warning() throws Exception {
             registry = new RepositoryRegistry(mockResourceWalker);
             pluginA = plugin("A");
-            registry.register(pluginA, getClass().getClassLoader());
-            registry.bindImpl(FakeRepo.class, AltFakeRepoImpl.class, ConflictMode.CONTEST);
-            registry.bindImpl(FakeRepo.class, FakeRepoImpl.class, ConflictMode.EXCLUSIVE); // EXCLUSIVE wins
+            registry.register(pluginA, getClass().getClassLoader())
+                    .onConfigure(ctx -> {
+                        ctx.bindImpl(FakeRepo.class, AltFakeRepoImpl.class, ConflictMode.CONTEST);
+                        ctx.bindImpl(FakeRepo.class, FakeRepoImpl.class, ConflictMode.EXCLUSIVE); // EXCLUSIVE wins
+                        ctx.publish(FakeRepo.class, mockManager);
+                    });
 
-            publish(FakeRepo.class);
             var future = registry.closeRegistration();
             future.get(2, TimeUnit.SECONDS);
             assertEquals(FakeRepoImpl.class, registry.getImplementationType(FakeRepo.class));
@@ -700,10 +811,12 @@ public class RepositoryRegistryTest {
             };
             registry = new RepositoryRegistry(walker);
             pluginA = plugin("A");
-            registry.register(pluginA, getClass().getClassLoader());
-            registry.bindImpl(FakeRepo.class, FakeRepoImpl.class, ConflictMode.CONTEST); // CONTEST wins over SUGGEST
+            registry.register(pluginA, getClass().getClassLoader())
+                    .onConfigure(ctx -> {
+                        ctx.bindImpl(FakeRepo.class, FakeRepoImpl.class, ConflictMode.CONTEST); // CONTEST wins over SUGGEST
+                        ctx.publish(FakeRepo.class, mockManager);
+                    });
 
-            publish(FakeRepo.class);
             var future = registry.closeRegistration(); // no resolver needed
             future.get(2, TimeUnit.SECONDS);
             assertEquals(FakeRepoImpl.class, registry.getImplementationType(FakeRepo.class));
@@ -713,11 +826,13 @@ public class RepositoryRegistryTest {
         void contest_contest_withResolver_resolves() throws Exception {
             registry = new RepositoryRegistry(mockResourceWalker);
             pluginA = plugin("A");
-            registry.register(pluginA, getClass().getClassLoader());
-            registry.bindImpl(FakeRepo.class, FakeRepoImpl.class, ConflictMode.CONTEST);
-            registry.bindImpl(FakeRepo.class, AltFakeRepoImpl.class, ConflictMode.CONTEST);
+            registry.register(pluginA, getClass().getClassLoader())
+                    .onConfigure(ctx -> {
+                        ctx.bindImpl(FakeRepo.class, FakeRepoImpl.class, ConflictMode.CONTEST);
+                        ctx.bindImpl(FakeRepo.class, AltFakeRepoImpl.class, ConflictMode.CONTEST);
+                        ctx.publish(FakeRepo.class, mockManager);
+                    });
 
-            publish(FakeRepo.class);
             var opts = RegistrationOptions.empty().bindingResolver((api, candidates) -> AltFakeRepoImpl.class);
             var future = registry.closeRegistration(opts);
             future.get(2, TimeUnit.SECONDS);
@@ -757,10 +872,12 @@ public class RepositoryRegistryTest {
         @Test
         @DisplayName("logDialectFilterDrops(false) suppresses the drop warning and still resolves the compatible impl")
         void logDialectFilterDrops_false_suppressesWarning() throws Exception {
-            registry.register(pluginA, getClass().getClassLoader());
-            registry.bindImpl(FakeRepo.class, SqliteOnlyRepoImpl.class, ConflictMode.CONTEST);
-            registry.bindImpl(FakeRepo.class, MySqlOnlyRepoImpl.class, ConflictMode.CONTEST);
-            publish(FakeRepo.class);
+            registry.register(pluginA, getClass().getClassLoader())
+                    .onConfigure(ctx -> {
+                        ctx.bindImpl(FakeRepo.class, SqliteOnlyRepoImpl.class, ConflictMode.CONTEST);
+                        ctx.bindImpl(FakeRepo.class, MySqlOnlyRepoImpl.class, ConflictMode.CONTEST);
+                        ctx.publish(FakeRepo.class, mockManager);
+                    });
 
             var opts = RegistrationOptions.empty().logDialectFilterDrops(false);
             registry.closeRegistration(opts).get(2, TimeUnit.SECONDS);
@@ -771,9 +888,11 @@ public class RepositoryRegistryTest {
         @Test
         @DisplayName("throwOnExclusiveDialectFilterDrop(false) demotes the error to a warning and close succeeds")
         void throwOnExclusiveDialectFilterDrop_false_closesNormally() throws Exception {
-            registry.register(pluginA, getClass().getClassLoader());
-            registry.bindImpl(FakeRepo.class, MySqlOnlyRepoImpl.class); // EXCLUSIVE, but MySQL-only on SQLITE provider
-            publish(FakeRepo.class);
+            registry.register(pluginA, getClass().getClassLoader())
+                    .onConfigure(ctx -> {
+                        ctx.bindImpl(FakeRepo.class, MySqlOnlyRepoImpl.class); // EXCLUSIVE, but MySQL-only on SQLITE provider
+                        ctx.publish(FakeRepo.class, mockManager);
+                    });
 
             var opts = RegistrationOptions.empty().throwOnExclusiveDialectFilterDrop(false);
             registry.closeRegistration(opts).get(2, TimeUnit.SECONDS); // must not throw
