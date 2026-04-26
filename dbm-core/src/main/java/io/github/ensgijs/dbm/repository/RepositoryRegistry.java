@@ -71,8 +71,10 @@ public final class RepositoryRegistry {
     public static final String DB_REGISTRY_RESOURCE_PATH = "db/registry/";
 
     private static RepositoryRegistry globalRegistryInstance;
-    private static OneShotConsumableSubscribableEvent<RepositoryRegistry> onGlobalRegistryCreatedEvent;
-
+    private static class OnGlobalRegistryCreatedEventHolder {
+        static final OneShotConsumableSubscribableEvent<RepositoryRegistry> INSTANCE =
+                new OneShotConsumableSubscribableEvent<>();
+    }
     private final ResourceWalker resourceWalker;
     private volatile boolean registrationClosed = false;
     private Queue<RegistrationHelper> pendingRegistrations = new ConcurrentLinkedQueue<>();
@@ -85,7 +87,7 @@ public final class RepositoryRegistry {
     /// All binding candidates: api → ordered list of candidates (resource-file SUGGEST + programmatic)
     private final Map<Class<? extends Repository>, List<BindingEntry>> bindingCandidates = new LinkedHashMap<>();
 
-    /// api class → list of ProviderEntries (populated via {@link #publish} during onConfigure)
+    /// api class → list of ProviderEntries (populated via {@link RegistrationBootstrappingContext#publish} during onConfigure)
     private final Map<Class<? extends Repository>, List<ProviderEntry>> contestantProviders = new LinkedHashMap<>();
 
     /// Resolved after {@link #closeRegistration}: api class → winning SqlDatabaseManager
@@ -121,8 +123,8 @@ public final class RepositoryRegistry {
                     globalRegistryInstance = new RepositoryRegistry();
                 }
             }
-            if (created && onGlobalRegistryCreatedEvent != null)
-                onGlobalRegistryCreatedEvent.accept(globalRegistryInstance);
+            if (created)
+                OnGlobalRegistryCreatedEventHolder.INSTANCE.accept(globalRegistryInstance);
         }
         return globalRegistryInstance;
     }
@@ -137,7 +139,7 @@ public final class RepositoryRegistry {
      * registry has already been created, any new subscribers will be immediately notified.
      */
     public static SubscribableEvent<RepositoryRegistry> onGlobalRegistryCreatedEvent() {
-        return onGlobalRegistryCreatedEvent;
+        return OnGlobalRegistryCreatedEventHolder.INSTANCE;
     }
 
     // -----------------------------------------------------------------------
@@ -184,8 +186,9 @@ public final class RepositoryRegistry {
     /**
      * Controls how a registration competes when multiple candidates exist for the same slot.
      * <p>
-     * Used for provider publication ({@link #publish}), impl binding ({@link #bindImpl}),
-     * and replaceable composition registration ({@link #registerComposition}).
+     * Used for provider publication ({@link RegistrationBootstrappingContext#publish}),
+     * impl binding ({@link RegistrationBootstrappingContext#bindImpl}),
+     * and replaceable composition registration ({@link RegistrationBootstrappingContext#registerComposition}).
      * </p>
      */
     public enum ConflictMode {
@@ -250,39 +253,6 @@ public final class RepositoryRegistry {
             @NotNull ConflictMode mode,
             @Nullable PlatformHandle registeredBy) {}
 
-    /**
-     * Registers {@code manager} as the {@link ConflictMode#EXCLUSIVE EXCLUSIVE} provider for {@code api}.
-     * <p>Must be called from an {@link RegistrationHelper#onConfigure} callback.</p>
-     *
-     * @throws RepositoryInitializationException If another provider has already been published for this api.
-     * @throws IllegalStateException             If registration has already been closed.
-     */
-    @VisibleForTesting
-    <T extends Repository> void publish(
-            @NotNull Class<T> api,
-            @NotNull SqlDatabaseManager manager
-    ) throws RepositoryInitializationException {
-        publishInternal(api, manager, ConflictMode.EXCLUSIVE, manager.getPlatformHandle());
-    }
-
-    /**
-     * Registers {@code manager} as a provider for {@code api} with the specified {@code mode}.
-     * <p>Must be called from an {@link RegistrationHelper#onConfigure} callback.</p>
-     *
-     * @throws RepositoryInitializationException If {@code mode} is {@link ConflictMode#EXCLUSIVE EXCLUSIVE} and another
-     *                                           provider has already been published for this api, or if the
-     *                                           existing publication was {@code EXCLUSIVE}.
-     * @throws IllegalStateException             If registration has already been closed.
-     */
-    @VisibleForTesting
-    synchronized <T extends Repository> void publish(
-            @NotNull Class<T> api,
-            @NotNull SqlDatabaseManager manager,
-            @NotNull ConflictMode mode
-    ) throws RepositoryInitializationException {
-        publishInternal(api, manager, mode, manager.getPlatformHandle());
-    }
-
     private synchronized <T extends Repository> void publishInternal(
             @NotNull Class<T> api,
             @NotNull SqlDatabaseManager manager,
@@ -310,36 +280,6 @@ public final class RepositoryRegistry {
         }
 
         list.add(new ProviderEntry(manager, mode, registeredBy));
-    }
-
-    /**
-     * Programmatically binds {@code implClass} as the {@link ConflictMode#EXCLUSIVE EXCLUSIVE}
-     * provider for {@code api}. Throws if another EXCLUSIVE binding already exists for this api.
-     * Silently displaces any prior {@link ConflictMode#SUGGEST SUGGEST} entries.
-     *
-     * @throws RepositoryInitializationException If another EXCLUSIVE binding already exists.
-     * @throws IllegalStateException             If registration has already been closed.
-     */
-    public synchronized <T extends Repository> void bindImpl(
-            @NotNull Class<T> api,
-            @NotNull Class<? extends T> implClass
-    ) throws RepositoryInitializationException {
-        bindImplInternal(api, implClass, ConflictMode.EXCLUSIVE, null);
-    }
-
-    /**
-     * Programmatically binds {@code implClass} as a provider for {@code api} with the given mode.
-     *
-     * @throws RepositoryInitializationException If {@code mode} is {@link ConflictMode#EXCLUSIVE} and
-     *                                           another EXCLUSIVE binding already exists for this api.
-     * @throws IllegalStateException             If registration has already been closed.
-     */
-    public synchronized <T extends Repository> void bindImpl(
-            @NotNull Class<T> api,
-            @NotNull Class<? extends T> implClass,
-            @NotNull ConflictMode mode
-    ) throws RepositoryInitializationException {
-        bindImplInternal(api, implClass, mode, null);
     }
 
     private synchronized <T extends Repository> void bindImplInternal(
@@ -915,108 +855,9 @@ public final class RepositoryRegistry {
     // -----------------------------------------------------------------------
 
     /**
-     * Registers a {@link RepositoryComposition} implementation with an auto-discovered constructor.
-     * The class must have either a {@code (RepositoryRegistry)} or no-arg constructor.
-     * <p>
-     * Two valid lineages are supported:
-     * <ol>
-     * <li>{@code Concretion implements RepositoryComposition} — direct, non-replaceable. Stored under
-     *     the concrete key in {@code directCompositionCreators}.</li>
-     * <li>{@code Concretion extends AbstractBase implements RepositoryComposition} — replaceable.
-     *     Stored as a competitor in {@code compositionContests} under the abstract key.</li>
-     * </ol>
-     * <p>Must be called before {@link #closeRegistration()}.</p>
-     * <p>Note: {@code compositionType} must be a concrete (non-abstract, non-interface) class.
-     * Abstract types are not accepted here; they are the result of validating a registered
-     * concretion's lineage, not an input to registration.</p>
-     * @throws IllegalArgumentException If {@code compositionType} is abstract or an interface, if it extends
-     *     a concrete {@link RepositoryComposition}, or if the abstract intermediary chain is deeper than one.
-     * @apiNote Check {@link #isAcceptingRegistrations()} before calling outside of
-     * {@link #register(PlatformHandle, Object)}'s {@code onConfigure} callback.
-     */
-    public synchronized <T extends RepositoryComposition> void registerComposition(
-            @NotNull Class<T> compositionType
-    ) {
-        if (registrationClosed) throw new IllegalStateException("Registration is closed!");
-        registerCompositionInternal(compositionType, discoverCompositionCreator(compositionType), ConflictMode.CONTEST, null);
-    }
-
-    /**
-     * Registers a {@link RepositoryComposition} implementation with a custom creator function.
-     * <p>
-     * Two valid lineages are supported:
-     * <ol>
-     * <li>{@code Concretion implements RepositoryComposition} — direct, non-replaceable.</li>
-     * <li>{@code Concretion extends AbstractBase implements RepositoryComposition} — replaceable.</li>
-     * </ol>
-     * <p>Must be called before {@link #closeRegistration()}.</p>
-     * <p>Note: {@code compositionType} must be a concrete (non-abstract, non-interface) class.
-     * Abstract types are not accepted here; they are the result of validating a registered
-     * concretion's lineage, not an input to registration.</p>
-     * @throws IllegalArgumentException If {@code compositionType} is abstract or an interface, if it extends
-     *     a concrete {@link RepositoryComposition}, or if the abstract intermediary chain is deeper than one.
-     * @apiNote Check {@link #isAcceptingRegistrations()} before calling outside of
-     * {@link #register(PlatformHandle, Object)}'s {@code onConfigure} callback.
-     */
-    public synchronized <T extends RepositoryComposition> void registerComposition(
-            @NotNull Class<T> compositionType,
-            @NotNull ThrowingFunction<@NotNull RepositoryRegistry, @NotNull T> creator
-    ) {
-        if (registrationClosed) throw new IllegalStateException("Registration is closed!");
-        registerCompositionInternal(compositionType, creator, ConflictMode.CONTEST, null);
-    }
-
-    /**
-     * Registers a replaceable {@link RepositoryComposition} implementation with the given conflict mode.
-     * <p>Only valid for replaceable (abstract-extending) lineage. Calling this on a direct-concrete
-     * composition type throws {@link IllegalArgumentException}.</p>
-     *
-     * @throws IllegalArgumentException If {@code compositionType} has direct lineage (not replaceable),
-     *     is abstract or an interface, or if the abstract intermediary chain is invalid.
-     * @throws RepositoryInitializationException If {@code mode} is {@link ConflictMode#EXCLUSIVE} and
-     *     another composition is already registered for the same abstract key.
-     */
-    public synchronized <T extends RepositoryComposition> void registerComposition(
-            @NotNull Class<T> compositionType,
-            @NotNull ConflictMode mode
-    ) throws RepositoryInitializationException {
-        if (registrationClosed) throw new IllegalStateException("Registration is closed!");
-        Class<? extends RepositoryComposition> abstractKey = RepositoryComposition.identifyAbstractKey(compositionType);
-        if (abstractKey == null) {
-            throw new IllegalArgumentException(
-                    "ConflictMode use is only applicable to replaceable (abstract-extending) composition types. "
-                            + compositionType.getName() + " is a direct composition type and does not support ConflictMode.");
-        }
-        registerCompositionInternal(compositionType, discoverCompositionCreator(compositionType), mode, null);
-    }
-
-    /**
-     * Registers a replaceable {@link RepositoryComposition} with a custom creator and explicit mode.
-     *
-     * @throws IllegalArgumentException If {@code compositionType} has direct lineage.
-     * @throws RepositoryInitializationException If {@code mode} is {@link ConflictMode#EXCLUSIVE} and
-     *     another composition is already registered for the same abstract key.
-     */
-    public synchronized <T extends RepositoryComposition> void registerComposition(
-            @NotNull Class<T> compositionType,
-            @NotNull ThrowingFunction<@NotNull RepositoryRegistry, @NotNull T> creator,
-            @NotNull ConflictMode mode
-    ) throws RepositoryInitializationException {
-        if (registrationClosed) throw new IllegalStateException("Registration is closed!");
-        Class<? extends RepositoryComposition> abstractKey = RepositoryComposition.identifyAbstractKey(compositionType);
-        if (abstractKey == null) {
-            throw new IllegalArgumentException(
-                    "ConflictMode use is only applicable to replaceable (abstract-extending) composition types. "
-                            + compositionType.getName() + " is a direct composition type and does not support ConflictMode.");
-        }
-        registerCompositionInternal(compositionType, creator, mode, null);
-    }
-
-    /**
      * Determines the lineage of {@code compositionType} using {@link RepositoryComposition#identifyAbstractKey}
      * and routes it to either {@code directCompositionCreators} (lineage 1) or {@code compositionContests} (lineage 2).
      */
-    @SuppressWarnings("unchecked")
     private <T extends RepositoryComposition> void registerCompositionInternal(
             Class<T> compositionType,
             ThrowingFunction<RepositoryRegistry, ? extends T> creator,
@@ -1037,9 +878,7 @@ public final class RepositoryRegistry {
             list.add(new CompositionContestEntry(compositionType, creator, mode, registeredBy));
         } else {
             // Lineage 1 direct: mode is not applicable, store under the concrete key (last-write wins)
-            @SuppressWarnings("unchecked")
-            var previous = directCompositionCreators.put(
-                    compositionType, (ThrowingFunction<RepositoryRegistry, ? extends RepositoryComposition>) creator);
+            var previous = directCompositionCreators.put(compositionType, creator);
             if (previous != null) {
                 Logger.getLogger("RepositoryRegistry").warning(
                         "Direct composition " + compositionType.getName()
@@ -1473,8 +1312,9 @@ public final class RepositoryRegistry {
         public @NotNull PlatformHandle platformHandle() { return platformHandle; }
 
         /**
-         * Registers {@code manager} as the exclusive provider for {@code api}.
-         * @see RepositoryRegistry#publish(Class, SqlDatabaseManager)
+         * Registers {@code manager} as the {@link ConflictMode#EXCLUSIVE EXCLUSIVE} provider for {@code api}.
+         *
+         * @throws RepositoryInitializationException If another provider has already claimed {@code EXCLUSIVE} for this api.
          */
         public <T extends Repository> void publish(@NotNull Class<T> api, @NotNull SqlDatabaseManager manager)
                 throws RepositoryInitializationException {
@@ -1482,8 +1322,10 @@ public final class RepositoryRegistry {
         }
 
         /**
-         * Registers {@code manager} as a provider for {@code api} with the specified mode.
-         * @see RepositoryRegistry#publish(Class, SqlDatabaseManager, ConflictMode)
+         * Registers {@code manager} as a provider for {@code api} with the specified {@code mode}.
+         *
+         * @throws RepositoryInitializationException If {@code mode} is {@link ConflictMode#EXCLUSIVE} and another
+         *                                           provider has already claimed {@code EXCLUSIVE} for this api.
          */
         public <T extends Repository> void publish(@NotNull Class<T> api, @NotNull SqlDatabaseManager manager,
                 @NotNull ConflictMode mode) throws RepositoryInitializationException {
@@ -1491,8 +1333,11 @@ public final class RepositoryRegistry {
         }
 
         /**
-         * Programmatically binds {@code implClass} as the EXCLUSIVE provider for {@code api}.
-         * @see RepositoryRegistry#bindImpl(Class, Class)
+         * Programmatically binds {@code implClass} as the {@link ConflictMode#EXCLUSIVE EXCLUSIVE} provider for
+         * {@code api}. Throws if another EXCLUSIVE binding already exists for this api. Silently displaces any
+         * prior {@link ConflictMode#SUGGEST SUGGEST} entries.
+         *
+         * @throws RepositoryInitializationException If another {@code EXCLUSIVE} binding already exists.
          */
         public <T extends Repository> void bindImpl(@NotNull Class<T> api, @NotNull Class<? extends T> implClass)
                 throws RepositoryInitializationException {
@@ -1500,8 +1345,10 @@ public final class RepositoryRegistry {
         }
 
         /**
-         * Programmatically binds {@code implClass} as a provider for {@code api} with the given mode.
-         * @see RepositoryRegistry#bindImpl(Class, Class, ConflictMode)
+         * Programmatically binds {@code implClass} as a provider for {@code api} with the given {@code mode}.
+         *
+         * @throws RepositoryInitializationException If {@code mode} is {@link ConflictMode#EXCLUSIVE} and
+         *                                           another {@code EXCLUSIVE} binding already exists for this api.
          */
         public <T extends Repository> void bindImpl(@NotNull Class<T> api, @NotNull Class<? extends T> implClass,
                 @NotNull ConflictMode mode) throws RepositoryInitializationException {
@@ -1509,8 +1356,17 @@ public final class RepositoryRegistry {
         }
 
         /**
-         * Registers a {@link RepositoryComposition} with an auto-discovered constructor.
-         * @see RepositoryRegistry#registerComposition(Class)
+         * Registers a {@link RepositoryComposition} implementation with an auto-discovered constructor.
+         * The class must have either a {@code (RepositoryRegistry)} or no-arg constructor.
+         * <p>
+         * Two valid lineages are supported:
+         * <ol>
+         * <li>{@code Concretion implements RepositoryComposition} — direct, non-replaceable.</li>
+         * <li>{@code Concretion extends AbstractBase implements RepositoryComposition} — replaceable.</li>
+         * </ol>
+         *
+         * @throws IllegalArgumentException If {@code compositionType} is abstract or an interface, if it extends
+         *     a concrete {@link RepositoryComposition}, or if the abstract intermediary chain is deeper than one.
          */
         public <T extends RepositoryComposition> void registerComposition(@NotNull Class<T> compositionType)
                 throws RepositoryInitializationException {
@@ -1519,8 +1375,10 @@ public final class RepositoryRegistry {
         }
 
         /**
-         * Registers a {@link RepositoryComposition} with a custom creator function.
-         * @see RepositoryRegistry#registerComposition(Class, ThrowingFunction)
+         * Registers a {@link RepositoryComposition} implementation with a custom creator function.
+         *
+         * @throws IllegalArgumentException If {@code compositionType} is abstract or an interface, if it extends
+         *     a concrete {@link RepositoryComposition}, or if the abstract intermediary chain is deeper than one.
          */
         public <T extends RepositoryComposition> void registerComposition(
                 @NotNull Class<T> compositionType,
