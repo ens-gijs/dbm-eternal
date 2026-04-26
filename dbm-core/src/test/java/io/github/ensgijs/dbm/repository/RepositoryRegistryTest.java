@@ -297,6 +297,89 @@ public class RepositoryRegistryTest {
     }
 
     @Test
+    @DisplayName("Lifecycle state transitions: ACCEPTING → CONFIGURING → RESOLVING → READY")
+    void testLifecycleStateTransitions() throws Exception {
+        assertEquals(Lifecycle.ACCEPTING, registry.lifecycleState());
+        assertTrue(registry.isAcceptingRegistrations());
+        assertFalse(registry.isReady());
+
+        AtomicReference<Lifecycle> stateInOnConfigure = new AtomicReference<>();
+        AtomicReference<Lifecycle> stateInOnReady = new AtomicReference<>();
+
+        registry.register(pluginA, this)
+                .onConfigure(ctx -> stateInOnConfigure.set(registry.lifecycleState()))
+                .onReady(r -> stateInOnReady.set(registry.lifecycleState()));
+
+        registry.closeRegistration().get(1, TimeUnit.SECONDS);
+
+        assertEquals(Lifecycle.CONFIGURING, stateInOnConfigure.get(), "onConfigure must run during CONFIGURING");
+        assertEquals(Lifecycle.READY, stateInOnReady.get(), "onReady must run during READY (queries permitted)");
+        assertEquals(Lifecycle.READY, registry.lifecycleState());
+        assertFalse(registry.isAcceptingRegistrations());
+        assertTrue(registry.isReady());
+    }
+
+    @Test
+    @DisplayName("register() during CONFIGURING throws IllegalStateException — no NPE on null pendingRegistrations")
+    void testRegisterDuringConfiguringThrows() throws Exception {
+        AtomicReference<Throwable> caught = new AtomicReference<>();
+        registry.register(pluginA, this).onConfigure(ctx -> {
+            try {
+                registry.register(plugin("LateComer"), this);
+            } catch (Throwable t) {
+                caught.set(t);
+            }
+        });
+        registry.closeRegistration().get(1, TimeUnit.SECONDS);
+
+        assertInstanceOf(IllegalStateException.class, caught.get());
+        assertTrue(caught.get().getMessage().contains("CONFIGURING"));
+    }
+
+    @Test
+    @DisplayName("RegistrationBootstrappingContext is hard-invalidated after its onConfigure callback returns")
+    void testCtxInvalidatedAfterOnConfigure() throws Exception {
+        AtomicReference<RegistrationBootstrappingContext> escaped = new AtomicReference<>();
+        registry.register(pluginA, this).onConfigure(escaped::set);
+        registry.closeRegistration().get(1, TimeUnit.SECONDS);
+
+        var ctx = escaped.get();
+        assertNotNull(ctx);
+        var ex = assertThrows(IllegalStateException.class,
+                () -> ctx.publish(FakeRepo.class, mockManager));
+        assertTrue(ex.getMessage().contains("outside of its onConfigure callback"));
+        assertThrows(IllegalStateException.class,
+                () -> ctx.bindImpl(FakeRepo.class, FakeRepoImpl.class));
+        assertThrows(IllegalStateException.class,
+                () -> ctx.registerComposition(RepositoryCompositionTest.HeavyLogic.class));
+    }
+
+    @Test
+    @DisplayName("Captured ctx is invalidated even when onConfigure throws")
+    void testCtxInvalidatedAfterOnConfigureThrows() throws Exception {
+        AtomicReference<RegistrationBootstrappingContext> escaped = new AtomicReference<>();
+        registry.register(pluginA, this).onConfigure(ctx -> {
+            escaped.set(ctx);
+            throw new RuntimeException("boom");
+        });
+        // Future completes exceptionally because onConfigure threw; we don't care about the cause here.
+        var future = registry.closeRegistration();
+        assertThrows(ExecutionException.class, () -> future.get(1, TimeUnit.SECONDS));
+
+        var ctx = escaped.get();
+        assertNotNull(ctx);
+        assertThrows(IllegalStateException.class,
+                () -> ctx.publish(FakeRepo.class, mockManager));
+    }
+
+    @Test
+    @DisplayName("Queries before READY throw with state-aware message")
+    void testQueriesRequireReadyState() {
+        var ex = assertThrows(IllegalStateException.class, () -> registry.get(FakeRepo.class));
+        assertTrue(ex.getMessage().contains("ACCEPTING"));
+    }
+
+    @Test
     @DisplayName("setReadyExecutor dispatches onReady to the given executor")
     void testSetReadyExecutor() throws Exception {
         AtomicReference<Thread> onReadyThread = new AtomicReference<>();

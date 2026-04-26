@@ -75,8 +75,27 @@ public final class RepositoryRegistry {
         static final OneShotConsumableSubscribableEvent<RepositoryRegistry> INSTANCE =
                 new OneShotConsumableSubscribableEvent<>();
     }
+    /**
+     * Lifecycle state of a {@link RepositoryRegistry}, in monotonic order. Transitions are one-way:
+     * {@code ACCEPTING → CONFIGURING → RESOLVING → READY} (or → {@code FAILED} if the close errors out).
+     *
+     * <ul>
+     * <li>{@link #ACCEPTING}: {@link #register} is open. ctx-based registration not yet possible.</li>
+     * <li>{@link #CONFIGURING}: {@link #closeRegistration} has been called and is running Phase 1a
+     *     (onConfigure callbacks). Active {@link RegistrationBootstrappingContext} instances are
+     *     valid only for the body of their owning callback. New {@code register} calls are rejected.</li>
+     * <li>{@link #RESOLVING}: Phase 1a finished; conflict resolution (Phase 2) and onReady (Phase 3)
+     *     are running. Queries are not yet permitted because resolved state may not be complete.</li>
+     * <li>{@link #READY}: {@code closeRegistration} completed without fatal error. All queries are
+     *     permitted. Reflects the same condition the {@code closeRegistration} future resolves to.</li>
+     * <li>{@link #FAILED}: {@code closeRegistration} terminated with a non-recoverable error. Queries
+     *     throw. Inspect the {@code closeRegistration} future for the cause.</li>
+     * </ul>
+     */
+    public enum Lifecycle { ACCEPTING, CONFIGURING, RESOLVING, READY, FAILED }
+
     private final ResourceWalker resourceWalker;
-    private volatile boolean registrationClosed = false;
+    private volatile Lifecycle state = Lifecycle.ACCEPTING;
     private Queue<RegistrationHelper> pendingRegistrations = new ConcurrentLinkedQueue<>();
 
     /// api class → impl class.
@@ -169,14 +188,22 @@ public final class RepositoryRegistry {
     // State queries
     // -----------------------------------------------------------------------
 
-    /** Returns {@code true} while {@link #register} may still be called. */
-    public boolean isAcceptingRegistrations() {
-        return !registrationClosed;
+    /** The current {@link Lifecycle} state. Useful for diagnostics and tests. */
+    public Lifecycle lifecycleState() {
+        return state;
     }
 
-    /** Returns {@code true} after {@link #closeRegistration()} completes. */
+    /** Returns {@code true} while {@link #register} may still be called (i.e. state is {@link Lifecycle#ACCEPTING}). */
+    public boolean isAcceptingRegistrations() {
+        return state == Lifecycle.ACCEPTING;
+    }
+
+    /**
+     * Returns {@code true} once {@link #closeRegistration()} has completed without fatal error and
+     * all post-close queries are permitted (i.e. state is {@link Lifecycle#READY}).
+     */
     public boolean isReady() {
-        return registrationClosed;
+        return state == Lifecycle.READY;
     }
 
     // -----------------------------------------------------------------------
@@ -257,8 +284,10 @@ public final class RepositoryRegistry {
             @NotNull Class<T> api,
             @NotNull SqlDatabaseManager manager,
             @NotNull ConflictMode mode,
-            @Nullable PlatformHandle registeredBy) throws RepositoryInitializationException {
-        if (registrationClosed) throw new IllegalStateException("Registration is closed!");
+            @Nullable PlatformHandle registeredBy
+    ) throws RepositoryInitializationException {
+        // No state check: this method is reached only via a valid RegistrationBootstrappingContext,
+        // which is itself invalidated outside its onConfigure callback (see ctx.requireValid()).
         Repository.validateRepositoryApi(api);  // throws if invalid
 
         var list = contestantProviders.computeIfAbsent(api, k -> new ArrayList<>());
@@ -288,7 +317,7 @@ public final class RepositoryRegistry {
             @NotNull ConflictMode mode,
             @Nullable PlatformHandle registeredBy
     ) throws RepositoryInitializationException {
-        if (registrationClosed) throw new IllegalStateException("Registration is closed!");
+        // No state check: this method is reached only via a valid RegistrationBootstrappingContext.
         Repository.validateRepositoryApi(api);
         var list = bindingCandidates.computeIfAbsent(api, k -> new ArrayList<>());
         if (mode == ConflictMode.EXCLUSIVE) {
@@ -320,7 +349,7 @@ public final class RepositoryRegistry {
      */
     @SuppressWarnings("unchecked")
     public <I extends Repository> @NotNull I get(@NotNull Class<I> api) {
-        if (!registrationClosed) throw new IllegalStateException("Registration has not yet been closed!");
+        requireReady("get");
         var manager = resolvedProviders.get(api);
         if (manager == null) throw new RepositoryNotRegisteredException(api);
         var implClass = (Class<? extends I>) implBindings.get(api);
@@ -336,7 +365,7 @@ public final class RepositoryRegistry {
      */
     @SuppressWarnings("unchecked")
     public <I extends Repository> @NotNull Optional<I> find(@NotNull Class<I> api) {
-        if (!registrationClosed) throw new IllegalStateException("Registration has not yet been closed!");
+        requireReady("find");
         var manager = resolvedProviders.get(api);
         var implClass = (Class<? extends I>) implBindings.get(api);
         if (manager == null || implClass == null) return Optional.empty();
@@ -352,7 +381,7 @@ public final class RepositoryRegistry {
      * {@code false} if !{@link #isReady()}.
      */
     public boolean isProvidedBy(@NotNull Class<? extends Repository> api, @NotNull SqlDatabaseManager manager) {
-        if (!registrationClosed) return false;
+        if (state != Lifecycle.READY) return false;
         return manager == resolvedProviders.get(api);
     }
 
@@ -416,11 +445,23 @@ public final class RepositoryRegistry {
      */
     public RegistrationHelper register(@NotNull PlatformHandle platformHandle, @NotNull ClassLoader scope)
             throws RepositoryInitializationException, MigrationParseException {
-        if (registrationClosed) throw new IllegalStateException("Registration is closed!");
+        requireAccepting("register");
         scanPlugin(platformHandle, scope);
         RegistrationHelper helper = new RegistrationHelper(platformHandle);
         pendingRegistrations.add(helper);
         return helper;
+    }
+
+    private void requireAccepting(String op) {
+        if (state != Lifecycle.ACCEPTING) {
+            throw new IllegalStateException(op + "() requires lifecycle ACCEPTING but registry is " + state + ".");
+        }
+    }
+
+    private void requireReady(String op) {
+        if (state != Lifecycle.READY) {
+            throw new IllegalStateException(op + "() requires lifecycle READY but registry is " + state + ".");
+        }
     }
 
     /**
@@ -466,8 +507,11 @@ public final class RepositoryRegistry {
     public synchronized CompletableFuture<Boolean> closeRegistration(@NotNull RegistrationOptions options) {
         if (closeRegistrationFuture != null)
             return closeRegistrationFuture.thenApply(ignore -> false);
-        if (registrationClosed) return CompletableFuture.completedFuture(false);
+        if (state != Lifecycle.ACCEPTING) return CompletableFuture.completedFuture(false);
 
+        // Synchronously transition out of ACCEPTING so any concurrent register() call (or capture of
+        // a still-accepting state via isAcceptingRegistrations()) sees the closed door immediately.
+        state = Lifecycle.CONFIGURING;
         closeRegistrationFuture = new CompletableFuture<>();
         final List<RegistrationHelper> registrations = new LinkedList<>(this.pendingRegistrations);
         this.pendingRegistrations = null;
@@ -476,26 +520,30 @@ public final class RepositoryRegistry {
         Thread.ofVirtual().start(() -> {
             RepositoryInitializationException err = null;
 
-            // Phase 1a: onConfigure (dependency order, already sorted)
+            // Phase 1a: onConfigure (dependency order, already sorted). Each ctx is hard-invalidated
+            // when its onConfigure callback returns, so a captured reference cannot be reused later.
             Set<PlatformHandle> blackmarkedHandles = new HashSet<>();
             var iter = registrations.listIterator();
             while (iter.hasNext()) {
                 var r = iter.next();
                 r.mutable = false;
                 if (r.onConfigure != null) {
+                    var ctx = new RegistrationBootstrappingContext(this, r.platformHandle);
                     try {
-                        r.onConfigure.accept(new RegistrationBootstrappingContext(this, r.platformHandle));
+                        r.onConfigure.accept(ctx);
                     } catch (Throwable ex) {
                         blackmarkedHandles.add(r.platformHandle);
                         if (err == null) err = new RepositoryInitializationException(
                                 "Error in onConfigure for '" + r.platformHandle.name() + "'.");
                         err.addSuppressed(ex);
                         iter.remove(); // exclude from onReady since configure failed
+                    } finally {
+                        ctx.invalidate();
                     }
                 }
             }
-            // Formally close registration
-            registrationClosed = true;
+            // End of Phase 1a: registration writes are closed; conflict resolution begins.
+            state = Lifecycle.RESOLVING;
 
             // Phase 1b: Purge all registrations made by errored handles; their configurations are incomplete
             // and partial state may be dangerous.
@@ -753,6 +801,10 @@ public final class RepositoryRegistry {
                         if (evt != null) evt.subscribe(dialect -> validateDialectChange(mgr, dialect));
                     });
 
+            // End of Phase 2: registry is fully resolved. Transition to READY (or FAILED on fatal error)
+            // BEFORE running Phase 3 so that onReady callbacks see a queryable registry.
+            state = (err == null) ? Lifecycle.READY : Lifecycle.FAILED;
+
             // Phase 3: onReady
             for (var r : registrations) {
                 if (r.onReady != null) {
@@ -812,7 +864,7 @@ public final class RepositoryRegistry {
     @VisibleForTesting
     void scanPlugin(@NotNull PlatformHandle platformHandle, @NotNull ClassLoader scope)
             throws RepositoryInitializationException, MigrationParseException {
-        if (registrationClosed) throw new IllegalStateException("Registration is closed!");
+        requireAccepting("scanPlugin");
 
         MigrationLoader.loadMigrations(platformHandle, scope);
 
@@ -937,8 +989,7 @@ public final class RepositoryRegistry {
             @NotNull Class<T> compositionType,
             @Nullable ThrowingFunction<@NotNull RepositoryRegistry, @NotNull T> fallbackCreator
     ) throws RepositoryInitializationException {
-        if (!registrationClosed) throw new IllegalStateException("Cannot access composite flyweights before registration is closed.");
-        if (resolvedCompositionCreators == null) throw new IllegalStateException("closeRegistration() is still in progress.");
+        requireReady("getCompositeRepository");
 
         RepositoryComposition cached = compositeInstances.get(compositionType);
         if (cached != null) return (T) cached;
@@ -1093,7 +1144,7 @@ public final class RepositoryRegistry {
      *                               {@code newDialect}.
      */
     void validateDialectChange(@NotNull SqlDatabaseManager manager, @NotNull SqlDialect newDialect) {
-        if (!registrationClosed || resolvedProviders == null) return;
+        if (state != Lifecycle.READY || resolvedProviders == null) return;
         List<String> errors = new ArrayList<>();
         for (var entry : resolvedProviders.entrySet()) {
             if (entry.getValue() != manager) continue;
@@ -1299,25 +1350,47 @@ public final class RepositoryRegistry {
     // RegistrationBootstrappingContext
     // -----------------------------------------------------------------------
 
+    /**
+     * The configuration handle passed to a {@link RegistrationHelper#onConfigure} callback. The sole
+     * supported entry point for publishing providers, binding impls, and registering compositions.
+     *
+     * <p><b>Validity window.</b> A ctx is valid only for the duration of the lambda body it was passed
+     * to. The instance is hard-invalidated as soon as that lambda returns (whether normally or by
+     * throwing). Capturing a ctx and using it after — including from another thread — throws
+     * {@link IllegalStateException}. This guard is intentional: registration must happen inside the
+     * configure phase so the registry can attribute every entry to a {@link PlatformHandle}.</p>
+     */
     public static final class RegistrationBootstrappingContext {
         private final @NotNull RepositoryRegistry registry;
         private final @NotNull PlatformHandle platformHandle;
+        private volatile boolean valid = true;
 
         private RegistrationBootstrappingContext(@NotNull RepositoryRegistry registry, @NotNull PlatformHandle platformHandle) {
             this.registry = registry;
             this.platformHandle = platformHandle;
         }
 
-        public @NotNull RepositoryRegistry registry() { return registry; }
-        public @NotNull PlatformHandle platformHandle() { return platformHandle; }
+        private void requireValid() {
+            if (!valid) throw new IllegalStateException(
+                    "RegistrationBootstrappingContext for '" + platformHandle.name()
+                            + "' was used outside of its onConfigure callback. The context is only valid "
+                            + "for the duration of the lambda passed to RegistrationHelper.onConfigure(...).");
+        }
+
+        /** Marks this context invalid. Called by {@link RepositoryRegistry#closeRegistration} after each onConfigure. */
+        void invalidate() {
+            valid = false;
+        }
 
         /**
          * Registers {@code manager} as the {@link ConflictMode#EXCLUSIVE EXCLUSIVE} provider for {@code api}.
          *
          * @throws RepositoryInitializationException If another provider has already claimed {@code EXCLUSIVE} for this api.
+         * @throws IllegalStateException             If this ctx has been invalidated (used outside its onConfigure callback).
          */
         public <T extends Repository> void publish(@NotNull Class<T> api, @NotNull SqlDatabaseManager manager)
                 throws RepositoryInitializationException {
+            requireValid();
             registry.publishInternal(api, manager, ConflictMode.EXCLUSIVE, platformHandle);
         }
 
@@ -1326,9 +1399,11 @@ public final class RepositoryRegistry {
          *
          * @throws RepositoryInitializationException If {@code mode} is {@link ConflictMode#EXCLUSIVE} and another
          *                                           provider has already claimed {@code EXCLUSIVE} for this api.
+         * @throws IllegalStateException             If this ctx has been invalidated.
          */
         public <T extends Repository> void publish(@NotNull Class<T> api, @NotNull SqlDatabaseManager manager,
                 @NotNull ConflictMode mode) throws RepositoryInitializationException {
+            requireValid();
             registry.publishInternal(api, manager, mode, platformHandle);
         }
 
@@ -1338,9 +1413,11 @@ public final class RepositoryRegistry {
          * prior {@link ConflictMode#SUGGEST SUGGEST} entries.
          *
          * @throws RepositoryInitializationException If another {@code EXCLUSIVE} binding already exists.
+         * @throws IllegalStateException             If this ctx has been invalidated.
          */
         public <T extends Repository> void bindImpl(@NotNull Class<T> api, @NotNull Class<? extends T> implClass)
                 throws RepositoryInitializationException {
+            requireValid();
             registry.bindImplInternal(api, implClass, ConflictMode.EXCLUSIVE, platformHandle);
         }
 
@@ -1349,9 +1426,11 @@ public final class RepositoryRegistry {
          *
          * @throws RepositoryInitializationException If {@code mode} is {@link ConflictMode#EXCLUSIVE} and
          *                                           another {@code EXCLUSIVE} binding already exists for this api.
+         * @throws IllegalStateException             If this ctx has been invalidated.
          */
         public <T extends Repository> void bindImpl(@NotNull Class<T> api, @NotNull Class<? extends T> implClass,
                 @NotNull ConflictMode mode) throws RepositoryInitializationException {
+            requireValid();
             registry.bindImplInternal(api, implClass, mode, platformHandle);
         }
 
@@ -1367,9 +1446,11 @@ public final class RepositoryRegistry {
          *
          * @throws IllegalArgumentException If {@code compositionType} is abstract or an interface, if it extends
          *     a concrete {@link RepositoryComposition}, or if the abstract intermediary chain is deeper than one.
+         * @throws IllegalStateException If this ctx has been invalidated.
          */
         public <T extends RepositoryComposition> void registerComposition(@NotNull Class<T> compositionType)
                 throws RepositoryInitializationException {
+            requireValid();
             registry.registerCompositionInternal(
                     compositionType, registry.discoverCompositionCreator(compositionType), ConflictMode.CONTEST, platformHandle);
         }
@@ -1379,20 +1460,25 @@ public final class RepositoryRegistry {
          *
          * @throws IllegalArgumentException If {@code compositionType} is abstract or an interface, if it extends
          *     a concrete {@link RepositoryComposition}, or if the abstract intermediary chain is deeper than one.
+         * @throws IllegalStateException If this ctx has been invalidated.
          */
         public <T extends RepositoryComposition> void registerComposition(
                 @NotNull Class<T> compositionType,
                 @NotNull ThrowingFunction<@NotNull RepositoryRegistry, @NotNull T> creator
         ) throws RepositoryInitializationException {
+            requireValid();
             registry.registerCompositionInternal(compositionType, creator, ConflictMode.CONTEST, platformHandle);
         }
 
         /**
          * Registers a replaceable {@link RepositoryComposition} with an auto-discovered constructor and the given mode.
+         *
+         * @throws IllegalStateException If this ctx has been invalidated.
          */
         public <T extends RepositoryComposition> void registerComposition(
                 @NotNull Class<T> compositionType, @NotNull ConflictMode mode)
                 throws RepositoryInitializationException {
+            requireValid();
             Class<? extends RepositoryComposition> abstractKey = RepositoryComposition.identifyAbstractKey(compositionType);
             if (abstractKey == null) throw new IllegalArgumentException(
                     "ConflictMode is only applicable to replaceable (abstract-extending) composition types. "
@@ -1403,12 +1489,15 @@ public final class RepositoryRegistry {
 
         /**
          * Registers a replaceable {@link RepositoryComposition} with a custom creator and the given mode.
+         *
+         * @throws IllegalStateException If this ctx has been invalidated.
          */
         public <T extends RepositoryComposition> void registerComposition(
                 @NotNull Class<T> compositionType,
                 @NotNull ThrowingFunction<@NotNull RepositoryRegistry, @NotNull T> creator,
                 @NotNull ConflictMode mode)
                 throws RepositoryInitializationException {
+            requireValid();
             Class<? extends RepositoryComposition> abstractKey = RepositoryComposition.identifyAbstractKey(compositionType);
             if (abstractKey == null) throw new IllegalArgumentException(
                     "ConflictMode is only applicable to replaceable (abstract-extending) composition types. "
