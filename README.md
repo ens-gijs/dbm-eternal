@@ -1,7 +1,8 @@
 # dbm-eternal
 
 A platform-agnostic SQL database management library providing connection pooling,
-schema migrations, and a repository pattern with a plugin-friendly voting/election system.
+schema migrations, and a repository pattern with a plugin-friendly registry that
+resolves provider conflicts between modules.
 
 ## Modules
 
@@ -123,19 +124,19 @@ public interface UserRepository extends Repository {
 }
 
 public class UserRepositoryImpl extends AbstractRepository implements UserRepository {
-    public UserRepositoryImpl(SqlDatabaseManager db) {
+    public UserRepositoryImpl(SqlClient db) {
         super(db);
     }
 
     @Override
     public void save(User user) {
-        getDatabaseManager().executeUpdate(
+        sqlClient.executeUpdate(
             "INSERT INTO users (id, name) VALUES (?, ?)", user.id(), user.name());
     }
 
     @Override
     public Optional<User> findById(long id) {
-        return getDatabaseManager().executeQuery(
+        return sqlClient.executeQuery(
             "SELECT id, name FROM users WHERE id = ?",
             rs -> rs.next() ? Optional.of(new User(rs.getLong("id"), rs.getString("name")))
                             : Optional.empty(),
@@ -144,11 +145,13 @@ public class UserRepositoryImpl extends AbstractRepository implements UserReposi
 }
 ```
 
-Register the implementation by placing a file in `src/main/resources/db/registry/` whose
-filename is the fully-qualified class name of the implementation class:
+Register the implementation by placing a file in `src/main/resources/db/registry/`. The
+filename is the fully-qualified name of the **API interface**; the file's single line
+of content is the fully-qualified name of the **implementation class**:
 
 ```
-db/registry/com.example.myplugin.UserRepositoryImpl
+# file: db/registry/com.example.myplugin.UserRepository
+com.example.myplugin.UserRepositoryImpl
 ```
 
 ### 6. Bootstrap the registry
@@ -156,15 +159,19 @@ db/registry/com.example.myplugin.UserRepositoryImpl
 ```java
 RepositoryRegistry registry = new RepositoryRegistry();
 
+// Scanning phase — call once per plugin/module. Scans the given classloader for
+// db/registry/ and db/migrate/ resources.
 registry.register(platform, MyPlugin.class.getClassLoader())
     .onConfigure(ctx -> {
-        ctx.nominateDefaultProvider(UserRepository.class, myDatabaseManager);
+        // Bind an API to a SqlDatabaseManager that owns its connection + migrations.
+        ctx.publish(UserRepository.class, myDatabaseManager);
     })
     .onReady(reg -> {
-        UserRepository users = reg.getDefaultRepository(UserRepository.class);
+        UserRepository users = reg.get(UserRepository.class);
         // use repos...
     });
 
+// Ready phase — resolves conflicts and runs onReady callbacks.
 registry.closeRegistration();
 ```
 
