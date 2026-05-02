@@ -3,17 +3,12 @@
 A platform-agnostic SQL database management library providing connection pooling,
 schema migrations, and a repository pattern with a plugin-friendly voting/election system.
 
-Designed to be general-purpose but with first-class support for multi-plugin environments
-such as [Paper](https://papermc.io/) and [Velocity](https://velocitypowered.com/) Minecraft servers.
-
 ## Modules
 
 | Module | Description |
 |---|---|
 | `dbm-sql` | Core SQL layer — connection pooling (HikariCP), statement execution, batch/upsert helpers, async support, utilities |
 | `dbm-core` | Schema migration engine + repository registry built on `dbm-sql` |
-| `dbm-platform-paper` | Paper (Minecraft) platform integration _(in progress)_ |
-| `dbm-platform-velocity` | Velocity (Minecraft) platform integration _(in progress)_ |
 
 ## Quick Start
 

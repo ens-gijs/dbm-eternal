@@ -1,11 +1,11 @@
-# Graph Report - dbm-eternal  (2026-04-26)
+# Graph Report - focused-germain-053b51  (2026-05-01)
 
 ## Corpus Check
-- 75 files · ~127,580 words
+- 74 files · ~121,916 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 871 nodes · 2269 edges · 33 communities detected
+- 870 nodes · 2269 edges · 33 communities detected
 - Extraction: 45% EXTRACTED · 55% INFERRED · 0% AMBIGUOUS · INFERRED: 1238 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
@@ -41,8 +41,8 @@
 - [[_COMMUNITY_Community 28|Community 28]]
 - [[_COMMUNITY_Community 29|Community 29]]
 - [[_COMMUNITY_Community 30|Community 30]]
+- [[_COMMUNITY_Community 37|Community 37]]
 - [[_COMMUNITY_Community 38|Community 38]]
-- [[_COMMUNITY_Community 39|Community 39]]
 
 ## God Nodes (most connected - your core abstractions)
 1. `of()` - 45 edges
@@ -208,11 +208,11 @@ Nodes (1): RepositoryNotRegisteredException
 Cohesion: 0.67
 Nodes (1): ExceptionalSupplier
 
-### Community 38 - "Community 38"
+### Community 37 - "Community 37"
 Cohesion: 1.0
 Nodes (1): migration package-info
 
-### Community 39 - "Community 39"
+### Community 38 - "Community 38"
 Cohesion: 1.0
 Nodes (1): repository package-info
 
@@ -249,16 +249,16 @@ Nodes (1): repository package-info
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 - **Thin community `Community 30`** (3 nodes): `ExceptionalSupplier.java`, `ExceptionalSupplier`, `.get()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 38`** (1 nodes): `migration package-info`
+- **Thin community `Community 37`** (1 nodes): `migration package-info`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 39`** (1 nodes): `repository package-info`
+- **Thin community `Community 38`** (1 nodes): `repository package-info`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
 - **Why does `of()` connect `Community 9` to `Community 0`, `Community 1`, `Community 2`, `Community 3`, `Community 6`, `Community 13`, `Community 14`?**
-  _High betweenness centrality (0.053) - this node is a cross-community bridge._
+  _High betweenness centrality (0.054) - this node is a cross-community bridge._
 - **Why does `RepositoryRegistryTest` connect `Community 1` to `Community 8`, `Community 10`, `Community 7`?**
   _High betweenness centrality (0.047) - this node is a cross-community bridge._
 - **Why does `SqlClient` connect `Community 0` to `Community 10`, `Community 3`, `Community 4`, `Community 5`?**
