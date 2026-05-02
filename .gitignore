@@ -11,6 +11,11 @@ graphify-out/cache/
 graphify-out/manifest.json
 # local token tracking, not useful to share
 graphify-out/cost.json
+# local working files
+.graphify_incremental.json
+.graphify_old.json
+.graphify_uncached.txt
+.graphify_python
 
 # ##############################################################################
 # Created by https://www.toptal.com/developers/gitignore/api/gradle,intellij,java
@@ -184,4 +189,3 @@ gradle-app.setting
 *.hprof
 
 # End of https://www.toptal.com/developers/gitignore/api/gradle,intellij,java
-/.graphify_python
