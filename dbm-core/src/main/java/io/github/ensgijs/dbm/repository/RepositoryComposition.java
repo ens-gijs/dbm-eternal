@@ -33,8 +33,7 @@ import java.lang.reflect.Modifier;
  * <ul>
  * <li>{@link RepositoryComposition}'s must NOT call {@link RepositoryRegistry#getCompositeRepository(Class)} from
  * their constructor, they should wait until {@link #onInitialize(RepositoryRegistry)} is called.
- * <li>{@link RepositoryComposition}'s should use the passed {@link RepositoryRegistry} instead of accessing the
- * singleton {@link RepositoryRegistry#globalRegistry()}.
+ * <li>{@link RepositoryComposition}'s should use the passed {@link RepositoryRegistry}.
  * </ul>
  */
 public interface RepositoryComposition {

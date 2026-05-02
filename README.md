@@ -154,7 +154,7 @@ db/registry/com.example.myplugin.UserRepositoryImpl
 ### 6. Bootstrap the registry
 
 ```java
-RepositoryRegistry registry = RepositoryRegistry.globalRegistry();
+RepositoryRegistry registry = new RepositoryRegistry();
 
 registry.register(platform, MyPlugin.class.getClassLoader())
     .onConfigure(ctx -> {

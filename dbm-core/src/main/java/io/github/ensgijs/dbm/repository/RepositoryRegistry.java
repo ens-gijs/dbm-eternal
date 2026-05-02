@@ -61,8 +61,6 @@ import java.util.stream.Collectors;
  *     registry.</li>
  * </ul>
  *
- * <p>You may use the {@link #globalRegistry()} singleton or create isolated instances for testing or other use.</p>
- *
  * @see Repository
  * @see RepositoryApi
  * @see RepositoryComposition
@@ -70,11 +68,6 @@ import java.util.stream.Collectors;
 public final class RepositoryRegistry {
     public static final String DB_REGISTRY_RESOURCE_PATH = "db/registry/";
 
-    private static RepositoryRegistry globalRegistryInstance;
-    private static class OnGlobalRegistryCreatedEventHolder {
-        static final OneShotConsumableSubscribableEvent<RepositoryRegistry> INSTANCE =
-                new OneShotConsumableSubscribableEvent<>();
-    }
     /**
      * Lifecycle state of a {@link RepositoryRegistry}, in monotonic order. Transitions are one-way:
      * {@code ACCEPTING → CONFIGURING → RESOLVING → READY} (or → {@code FAILED} if the close errors out).
@@ -123,43 +116,6 @@ public final class RepositoryRegistry {
 
     /// Resolved after phase 1.75 in closeRegistration: lookup key → creator function
     private volatile Map<Class<? extends RepositoryComposition>, ThrowingFunction<RepositoryRegistry, ? extends RepositoryComposition>> resolvedCompositionCreators = null;
-
-    // -----------------------------------------------------------------------
-    // Singleton global registry
-    // -----------------------------------------------------------------------
-
-    /**
-     * @return The singleton global {@link RepositoryRegistry} instance.
-     * @see #isGlobalRegistryCreated()
-     * @see #onGlobalRegistryCreatedEvent()
-     */
-    public static RepositoryRegistry globalRegistry() {
-        if (globalRegistryInstance == null) {
-            boolean created = false;
-            synchronized (RepositoryRegistry.class) {
-                if (globalRegistryInstance == null) {
-                    created = true;
-                    globalRegistryInstance = new RepositoryRegistry();
-                }
-            }
-            if (created)
-                OnGlobalRegistryCreatedEventHolder.INSTANCE.accept(globalRegistryInstance);
-        }
-        return globalRegistryInstance;
-    }
-
-    /// Checks if the global registry has been created by someone having called {@link #globalRegistry()}.
-    public static boolean isGlobalRegistryCreated() {
-        return globalRegistryInstance != null;
-    }
-
-    /**
-     * Allows subscribing to be notified when/if the global registry has been created. If the global
-     * registry has already been created, any new subscribers will be immediately notified.
-     */
-    public static SubscribableEvent<RepositoryRegistry> onGlobalRegistryCreatedEvent() {
-        return OnGlobalRegistryCreatedEventHolder.INSTANCE;
-    }
 
     // -----------------------------------------------------------------------
     // Construction
