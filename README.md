@@ -41,8 +41,9 @@ SqlConnectionConfig sqliteConfig = SqliteConnectionConfig.of(new File("data"), "
 ### 3. Run queries with `SqlClient`
 
 ```java
-PlatformHandle platform = new SimplePlatformHandle("MyApp", List.of());
-SqlClient db = new SqlClient(platform, mysqlConfig);
+// Optional label — appears in pool names and toString() to ease log correlation.
+SqlClient db = new SqlClient("MyApp", mysqlConfig);
+// Or, with no label: new SqlClient(mysqlConfig)
 
 // Single update
 db.executeUpdate("INSERT INTO greetings (msg) VALUES (?)", "hello");

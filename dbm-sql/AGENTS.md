@@ -7,7 +7,6 @@ Core SQL layer. No dependency on `dbm-core` or platform modules. Java 21.
 | Package | Contents |
 |---|---|
 | `io.github.ensgijs.dbm.sql` | `SqlClient`, `ExecutionContext`, `SqlConnectionConfig` (+ `MySqlConnectionConfig`, `SqliteConnectionConfig`, `SqliteMemoryConnectionConfig`), `SqlDialect`, `UpsertStatement`, `StatementExecutor`, `SqlStatementSplitter`, `DatabaseException`, `ChunkedBatchExecutionException` |
-| `io.github.ensgijs.dbm.platform` | `PlatformHandle`, `SimplePlatformHandle` — abstraction over the host environment (plugin name, classloader, lifecycle hooks) |
 | `io.github.ensgijs.dbm.util` | `BubbleUpException` and subpackages: `function/` (throwing functional interfaces, `ValueOrException`), `io/` (`ResourceScanner`, `ResourceEntry`), `objects/` (`ObjectHelpers`), `threading/` (`ExecutorLimiter`, `LimitedVirtualThreadPerTaskExecutor`, async test helpers) |
 
 ## Core abstractions (god nodes)

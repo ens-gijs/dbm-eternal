@@ -39,7 +39,7 @@ public class RegistryEndToEndTest {
     @DisplayName("Registry wires real SqlDatabaseManager with in-memory SQLite bootstrapped by migration resource file")
     void e2e_smokeTest() throws Exception {
         var platform = new SimplePlatformHandle("SmokeTest", List.of());
-        var manager = new SqlDatabaseManager(platform, SqliteConnectionConfig.inMemory());
+        var manager = new SqlDatabaseManager(platform.name(), SqliteConnectionConfig.inMemory());
 
         var registry = new RepositoryRegistry();
         registry.register(new SimplePlatformHandle("E2E", List.of()), this)

@@ -3,7 +3,6 @@ package io.github.ensgijs.dbm.sql;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import io.github.ensgijs.dbm.migration.SchemaMigrator;
-import io.github.ensgijs.dbm.platform.PlatformHandle;
 import io.github.ensgijs.dbm.repository.AbstractRepository;
 import io.github.ensgijs.dbm.repository.FakeRepository;
 import io.github.ensgijs.dbm.repository.FakeRepositoryImpl;
@@ -23,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 public class SqlDatabaseManagerTest {
-    private PlatformHandle mockPlatformHandle;
+    private static final String LABEL = "TestPlugin";
     private SqlConnectionConfig mockConnectionConfig;
     private Function<@NotNull HikariConfig, HikariDataSource> mockHikariCreator;
     private HikariDataSource mockDataSource;
@@ -33,7 +32,6 @@ public class SqlDatabaseManagerTest {
 
     @BeforeEach
     protected void setUp() throws Exception {
-        mockPlatformHandle = mock(PlatformHandle.class);
         mockMigrator = mock(SchemaMigrator.class);
         mockHikariCreator = mock(Function.class);
         mockDataSource = mock(HikariDataSource.class);
@@ -41,7 +39,6 @@ public class SqlDatabaseManagerTest {
         mockConn = mock(Connection.class);
         ParameterMetaData mockMetaData = mock(ParameterMetaData.class);
 
-        when(mockPlatformHandle.name()).thenReturn("TestPlugin");
         when(mockHikariCreator.apply(any())).thenReturn(mockDataSource);
         when(mockDataSource.getConnection()).thenReturn(mockConn);
         when(mockConn.prepareStatement(anyString())).thenReturn(mockPs);
@@ -63,7 +60,7 @@ public class SqlDatabaseManagerTest {
             var config = new MySqlConnectionConfig(
                     "10.0.50.99", 1324, "MockedTestDb", 6, "rot", "tot42");
 
-            SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, config, mockMigrator, mockHikariCreator);
+            SqlDatabaseManager manager = new SqlDatabaseManager(LABEL, config, mockMigrator, mockHikariCreator);
 
             var configCaptor = org.mockito.ArgumentCaptor.forClass(HikariConfig.class);
             verify(mockHikariCreator).apply(configCaptor.capture());
@@ -81,7 +78,7 @@ public class SqlDatabaseManagerTest {
         void testSQLiteInitialization() {
             var config = new SqliteConnectionConfig(new File("/data/MockedTestDb.db"));
 
-            SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, config, mockMigrator, mockHikariCreator);
+            SqlDatabaseManager manager = new SqlDatabaseManager(LABEL, config, mockMigrator, mockHikariCreator);
 
             var configCaptor = org.mockito.ArgumentCaptor.forClass(HikariConfig.class);
             verify(mockHikariCreator).apply(configCaptor.capture());
@@ -97,7 +94,7 @@ public class SqlDatabaseManagerTest {
         @Test
         @DisplayName("Should NOT recreate pool if config is equivalent")
         void testReloadNoChange() {
-            SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, mockConnectionConfig, mockMigrator, mockHikariCreator);
+            SqlDatabaseManager manager = new SqlDatabaseManager(LABEL, mockConnectionConfig, mockMigrator, mockHikariCreator);
             clearInvocations(mockHikariCreator);
 
             manager.setSqlConnectionConfig(new MySqlConnectionConfig(
@@ -110,7 +107,7 @@ public class SqlDatabaseManagerTest {
         @Test
         @DisplayName("Should close old pool and invalidate cached repositories on config change")
         void testReloadWithChange() {
-            SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, mockConnectionConfig, mockMigrator, mockHikariCreator);
+            SqlDatabaseManager manager = new SqlDatabaseManager(LABEL, mockConnectionConfig, mockMigrator, mockHikariCreator);
 
             // Prime the cache
             FakeRepositoryImpl repo = (FakeRepositoryImpl) manager.getRepository(FakeRepository.class, FakeRepositoryImpl.class);
@@ -133,7 +130,7 @@ public class SqlDatabaseManagerTest {
         @Test
         @DisplayName("Should shutdown executor before closing DataSource")
         void testGracefulShutdown() throws InterruptedException {
-            SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, mockConnectionConfig, mockMigrator, mockHikariCreator);
+            SqlDatabaseManager manager = new SqlDatabaseManager(LABEL, mockConnectionConfig, mockMigrator, mockHikariCreator);
 
             manager.shutdown(5, TimeUnit.SECONDS);
 
@@ -149,7 +146,7 @@ public class SqlDatabaseManagerTest {
         when(mockDs.getConnection()).thenReturn(conn);
         when(conn.prepareStatement(anyString())).thenAnswer(c -> mock(PreparedStatement.class));
 
-        SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, mockConnectionConfig, mockMigrator, hc -> mockDs);
+        SqlDatabaseManager manager = new SqlDatabaseManager(LABEL, mockConnectionConfig, mockMigrator, hc -> mockDs);
         clearInvocations(conn);
 
         manager.executeSession(ctx -> {
@@ -169,7 +166,7 @@ public class SqlDatabaseManagerTest {
         when(mockDs.getConnection()).thenReturn(conn);
         when(conn.prepareStatement(anyString())).thenReturn(mock(PreparedStatement.class));
 
-        SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, mockConnectionConfig, mockMigrator, hc -> mockDs);
+        SqlDatabaseManager manager = new SqlDatabaseManager(LABEL, mockConnectionConfig, mockMigrator, hc -> mockDs);
         clearInvocations(conn);
 
         assertThrows(DatabaseException.class, () ->
@@ -183,7 +180,7 @@ public class SqlDatabaseManagerTest {
     @Test
     @DisplayName("Repository cache eviction on reload failure enables re-bootstrapping")
     void testRepositoryCacheEvictionOnReloadFailure() {
-        SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, mockConnectionConfig, mockMigrator, mockHikariCreator);
+        SqlDatabaseManager manager = new SqlDatabaseManager(LABEL, mockConnectionConfig, mockMigrator, mockHikariCreator);
 
         FakeRepositoryImpl result1 = (FakeRepositoryImpl) manager.getRepository(FakeRepository.class, FakeRepositoryImpl.class);
         assertNotNull(result1);
@@ -208,7 +205,7 @@ public class SqlDatabaseManagerTest {
     @Test
     @DisplayName("getRepository: flyweight — same impl twice returns same instance")
     void testGetRepositoryFlyweight() {
-        SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, mockConnectionConfig, mockMigrator, mockHikariCreator);
+        SqlDatabaseManager manager = new SqlDatabaseManager(LABEL, mockConnectionConfig, mockMigrator, mockHikariCreator);
 
         FakeRepository repo1 = manager.getRepository(FakeRepository.class, FakeRepositoryImpl.class);
         FakeRepository repo2 = manager.getRepository(FakeRepository.class, FakeRepositoryImpl.class);
@@ -222,7 +219,7 @@ public class SqlDatabaseManagerTest {
     @Test
     @DisplayName("getRepository: cache collision with different impl throws RepositoryInitializationException")
     void testGetRepositoryCollisionThrows() {
-        SqlDatabaseManager manager = new SqlDatabaseManager(mockPlatformHandle, mockConnectionConfig, mockMigrator, mockHikariCreator);
+        SqlDatabaseManager manager = new SqlDatabaseManager(LABEL, mockConnectionConfig, mockMigrator, mockHikariCreator);
 
         manager.getRepository(FakeRepository.class, FakeRepositoryImpl.class);
 
@@ -253,7 +250,7 @@ public class SqlDatabaseManagerTest {
     @DisplayName("validateNewConfig rejects dialect change when a cached repo does not support the new dialect")
     void validateNewConfig_cachedIncompatibleRepo_throws() {
         SqlDatabaseManager manager = new SqlDatabaseManager(
-                mockPlatformHandle, mockConnectionConfig, mockMigrator, mockHikariCreator);
+                LABEL, mockConnectionConfig, mockMigrator, mockHikariCreator);
         manager.getRepository(FakeRepository.class, MySqlOnlyFakeRepositoryImpl.class);
 
         var sqliteConfig = new SqliteConnectionConfig(new File("/data/test.db"));

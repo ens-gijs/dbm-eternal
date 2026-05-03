@@ -1,17 +1,14 @@
 package io.github.ensgijs.dbm.sql;
 
-import io.github.ensgijs.dbm.platform.SimplePlatformHandle;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-
-import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class SqliteMemoryConnectionConfigTest {
 
     private static SqlClient client(SqlConnectionConfig cfg) {
-        return new SqlClient(new SimplePlatformHandle("test", List.of()), cfg);
+        return new SqlClient("test", cfg);
     }
 
     // -----------------------------------------------------------------------

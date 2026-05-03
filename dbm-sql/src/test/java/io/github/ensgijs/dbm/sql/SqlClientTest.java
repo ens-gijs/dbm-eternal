@@ -2,7 +2,6 @@ package io.github.ensgijs.dbm.sql;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
-import io.github.ensgijs.dbm.platform.PlatformHandle;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.*;
 
@@ -22,7 +21,7 @@ import static org.mockito.Mockito.*;
 import static org.mockito.Mockito.clearInvocations;
 
 public class SqlClientTest {
-    private PlatformHandle mockPlatformHandle;
+    private static final String LABEL = "TestPlugin";
     private SqlConnectionConfig connConfig;
     private Function<@NotNull HikariConfig, HikariDataSource> mockHikariCreator;
     private HikariDataSource mockDataSource;
@@ -33,14 +32,12 @@ public class SqlClientTest {
 
     @BeforeEach
     protected void setUp() throws Exception {
-        mockPlatformHandle = mock(PlatformHandle.class);
         mockHikariCreator = mock(Function.class);
         mockDataSource = mock(HikariDataSource.class);
         mockPs = mock(PreparedStatement.class);
         mockConn = mock(Connection.class);
         ParameterMetaData mockMetaData = mock(ParameterMetaData.class);
 
-        when(mockPlatformHandle.name()).thenReturn("TestPlugin");
         when(mockHikariCreator.apply(any())).thenReturn(mockDataSource);
         when(mockDataSource.getConnection()).thenReturn(mockConn);
         when(mockConn.prepareStatement(anyString())).thenReturn(mockPs);
@@ -61,7 +58,7 @@ public class SqlClientTest {
             SqlConnectionConfig mockConfig = new MySqlConnectionConfig(
                     "10.0.50.99", 1324, "MockedTestDb", 6, "rot", "tot42");
 
-            SqlClient client = new SqlClient(mockPlatformHandle, mockConfig, mockHikariCreator);
+            SqlClient client = new SqlClient(LABEL, mockConfig, mockHikariCreator);
 
             ArgumentCaptor<HikariConfig> configCaptor = ArgumentCaptor.forClass(HikariConfig.class);
             verify(mockHikariCreator).apply(configCaptor.capture());
@@ -79,7 +76,7 @@ public class SqlClientTest {
         void testSQLiteInitialization() {
             SqlConnectionConfig mockConfig = new SqliteConnectionConfig(new File("/data/MockedTestDb.db"));
 
-            SqlClient client = new SqlClient(mockPlatformHandle, mockConfig, mockHikariCreator);
+            SqlClient client = new SqlClient(LABEL, mockConfig, mockHikariCreator);
 
             ArgumentCaptor<HikariConfig> configCaptor = ArgumentCaptor.forClass(HikariConfig.class);
             verify(mockHikariCreator).apply(configCaptor.capture());
@@ -95,7 +92,7 @@ public class SqlClientTest {
         @Test
         @DisplayName("Should NOT recreate pool if config is equivalent")
         void tesNoChange() {
-            SqlClient client = new SqlClient(mockPlatformHandle, connConfig, mockHikariCreator);
+            SqlClient client = new SqlClient(LABEL, connConfig, mockHikariCreator);
             clearInvocations(mockHikariCreator);
 
             connConfig = new MySqlConnectionConfig("10.0.50.99", 1324, "MockedTestDb", 6, "rot", "tot42");
@@ -108,7 +105,7 @@ public class SqlClientTest {
         @Test
         @DisplayName("Should close old pool on change")
         void testWithChange() {
-            SqlClient client = new SqlClient(mockPlatformHandle, connConfig, mockHikariCreator);
+            SqlClient client = new SqlClient(LABEL, connConfig, mockHikariCreator);
             clearInvocations(mockHikariCreator);
 
             connConfig = new MySqlConnectionConfig("10.0.50.99", 1324, "MockedTestDbV2", 6, "rot", "tot42");
@@ -125,7 +122,7 @@ public class SqlClientTest {
         @Test
         @DisplayName("Should shutdown executor before closing DataSource")
         void testGracefulShutdown() throws InterruptedException {
-            SqlClient client = new SqlClient(mockPlatformHandle, connConfig, mockHikariCreator);
+            SqlClient client = new SqlClient(LABEL, connConfig, mockHikariCreator);
 
             client.shutdown(5, TimeUnit.SECONDS);
 
@@ -142,7 +139,7 @@ public class SqlClientTest {
         when(mockDs.getConnection()).thenReturn(mockConn);
         when(mockConn.prepareStatement(anyString())).thenAnswer(c -> mock(PreparedStatement.class));
 
-        SqlClient client = new SqlClient(mockPlatformHandle, connConfig, hc -> mockDs);
+        SqlClient client = new SqlClient(LABEL, connConfig, hc -> mockDs);
         clearInvocations(mockConn);
 
         client.executeSession(ctx -> {
@@ -163,7 +160,7 @@ public class SqlClientTest {
         when(mockDs.getConnection()).thenReturn(mockConn);
         when(mockConn.prepareStatement(anyString())).thenReturn(mock(PreparedStatement.class));
 
-        SqlClient client = new SqlClient(mockPlatformHandle, connConfig, hc -> mockDs);
+        SqlClient client = new SqlClient(LABEL, connConfig, hc -> mockDs);
         clearInvocations(mockConn);
 
         assertThrows(DatabaseException.class, () -> {
@@ -183,7 +180,7 @@ public class SqlClientTest {
         @Test
         @DisplayName("fires with new dialect when dialect changes")
         void firesOnDialectChange() {
-            SqlClient client = new SqlClient(mockPlatformHandle, connConfig, mockHikariCreator);
+            SqlClient client = new SqlClient(LABEL, connConfig, mockHikariCreator);
             AtomicReference<SqlDialect> captured = new AtomicReference<>();
             client.onBeforeDialectChangeEvent().subscribe(captured::set);
 
@@ -195,7 +192,7 @@ public class SqlClientTest {
         @Test
         @DisplayName("does not fire when dialect is unchanged")
         void doesNotFireOnSameDialect() {
-            SqlClient client = new SqlClient(mockPlatformHandle, connConfig, mockHikariCreator);
+            SqlClient client = new SqlClient(LABEL, connConfig, mockHikariCreator);
             AtomicReference<SqlDialect> captured = new AtomicReference<>();
             client.onBeforeDialectChangeEvent().subscribe(captured::set);
 
@@ -209,7 +206,7 @@ public class SqlClientTest {
         @Test
         @DisplayName("subscriber exception propagates and rejects the config change")
         void subscriberExceptionPropagates() {
-            SqlClient client = new SqlClient(mockPlatformHandle, connConfig, mockHikariCreator);
+            SqlClient client = new SqlClient(LABEL, connConfig, mockHikariCreator);
             client.onBeforeDialectChangeEvent().subscribe(d -> {
                 throw new IllegalStateException("rejected");
             });
