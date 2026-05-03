@@ -14,7 +14,7 @@ Core SQL layer. No dependency on `dbm-core` or platform modules. Java 21.
 - `SqlClient` — entry point. Owns the HikariCP pool. Methods: `executeUpdate`, `executeQuery`, `executeUpsert`, `executeSession` (auto-commit per stmt), `executeTransaction` (atomic), `executeBatch`, `executeChunkedBatch`.
 - `ExecutionContext` — passed into session/transaction lambdas; same execute methods minus pool management.
 - `SqlConnectionConfig` (sealed-style hierarchy: `MySqlConnectionConfig`, `SqliteConnectionConfig`, `SqliteMemoryConnectionConfig`) — exposes `getDbUrl()`, `configurePool(HikariConfig)`, `maxConnections()`, `isEquivalent(other)`, and `dialect()`.
-- `UpsertStatement` — builder that emits dialect-correct `INSERT ... ON CONFLICT` / `ON DUPLICATE KEY UPDATE` SQL. Use `db.executeUpsert(stmt, args...)` or `db.sql(stmt)` for batch.
+- `UpsertStatement` — builder that emits dialect-correct `INSERT ... ON CONFLICT` / `ON DUPLICATE KEY UPDATE` SQL. Use `client.executeUpsert(stmt, args...)` or `client.sql(stmt)` for batch.
 - `SqlDialect` — enum (`MYSQL`, `SQLITE`); single source of truth for dialect branching.
 
 ## Reusable utilities (`io.github.ensgijs.dbm.util`)

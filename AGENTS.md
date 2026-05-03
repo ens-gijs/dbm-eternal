@@ -39,9 +39,4 @@ A graphify knowledge graph exists at [graphify-out/](graphify-out/). Read [graph
 
 ## Behavioral rules
 
-See [CLAUDE.md](CLAUDE.md) for the full set. Highlights:
-
-- **Surgical changes.** Touch only what the task requires; match existing style; do not refactor adjacent code.
-- **Simplicity.** No speculative abstractions, configurability, or error handling for impossible scenarios.
-- **Ask before assuming.** State assumptions explicitly; surface ambiguity instead of picking silently.
-- **Verify, don't claim.** Define a success check before coding; loop until it passes.
+See [CLAUDE.md](CLAUDE.md).
