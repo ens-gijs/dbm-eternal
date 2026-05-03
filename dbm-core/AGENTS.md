@@ -12,8 +12,10 @@ Schema migration engine + repository registry. Built on `dbm-sql`. Java 21.
 
 ## Core abstractions
 
-- `SqlDatabaseManager` — public entrypoint pairing a `SqlClient` with a migration set. Repository implementations receive one as a `SqlClient` via their constructor.
-- `RepositoryRegistry` — provides local or global multi-plugin registry with publish/bind/close lifecycle. Conflict resolution via `ConflictMode` + `RegistrationOptions`. `@RepositoryApi("name")` marks an interface; `@RepositoryImpl(dialect = ...)` filters implementations by dialect.
+- `Repository` — data access layer; wraps interactions with one or more tables into a logical storage unit.
+- `RepositoryComposition` — encapsulates the business logic required to coordinate actions across multiple `Repository`'s.
+- `SqlDatabaseManager` — public entrypoint extending `SqlClient`, adding `Repository` flyweights and automatic data migration execution.
+- `RepositoryRegistry` — provides local or sharable multi-plugin registry with publish/bind/close lifecycle. Conflict resolution via `ConflictMode` + `RegistrationOptions`. `@RepositoryApi("name")` marks an interface; `@RepositoryImpl(dialect = ...)` filters implementations by dialect.
 - `SchemaMigrator` — discovers, sorts (topological by `!AFTER` directives + version), and applies migrations.
 - `MigrationLoader` — parses migration filenames (`{name}.{version}[.{dialect}].{ext}`) and source bodies. `.sql` files require a dialect; `.run` files reference a `Migration.ProgrammaticMigration` Java class. See [README.md](../README.md#4-define-migrations) for the full naming spec.
 
@@ -21,6 +23,7 @@ Schema migration engine + repository registry. Built on `dbm-sql`. Java 21.
 
 - Repository implementations: extend `AbstractRepository`, take `SqlClient` in the constructor, register default mappings by placing a service locator file at `src/main/resources/db/registry/<fully.qualified.RepoApiInterfaceName>` (with one line: `<fully.qualified.ImplClassName>`).
 - Migrations live at `src/main/resources/db/migrate/`. Use `!AFTER: <name>.<version>` at the top of a file to declare dependencies.
+
 ## Events — use `SubscribableEvent`, do not poll
 
 Lifecycle and validation signals in `dbm-core` (e.g. dialect-change validation, registry ready/closed, migration progress) are exposed via the `SubscribableEvent` family from `dbm-sql` (`io.github.ensgijs.dbm.util.objects`). When adding new notifications to `dbm-core` or where subscribe-notify/observer solutions are needed:

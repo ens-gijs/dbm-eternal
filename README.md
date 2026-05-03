@@ -36,25 +36,51 @@ SqlConnectionConfig mysqlConfig = new MySqlConnectionConfig(
 SqlConnectionConfig sqliteConfig = new SqliteConnectionConfig(new File("data/my_database.db"));
 // or equivalently:
 SqlConnectionConfig sqliteConfig = SqliteConnectionConfig.of(new File("data"), "my_database");
+
+// In-memory SQLite DB
+SqlConnectionConfig inMemConfig = SqliteConnectionConfig.inMemory();
 ```
 
 ### 3. Run queries with `SqlClient`
 
 ```java
-PlatformHandle platform = new SimplePlatformHandle("MyApp", List.of());
-SqlClient db = new SqlClient(platform, mysqlConfig);
+PlatformHandle platform = new SimplePlatformHandle("MyApp");
+SqlClient client = new SqlClient(platform, mysqlConfig);
 
-// Single update
-db.executeUpdate("INSERT INTO greetings (msg) VALUES (?)", "hello");
+// Single updates
+client.executeUpdate("CREATE TABLE IF NOT EXISTS greetings (id INTEGER PRIMARY KEY ASC, msg VARCHAR(64))");
+client.executeUpdate("INSERT INTO greetings (msg) VALUES (?)", "hello");
+
+// Check if a table exists
+if (client.tableExists("users")) {
+    // ...
+}
+// Check if a table column exists
+if (client.tableHasColumn("users", "full_name")) {
+    // ...
+}
 
 // Single query
-String msg = db.executeQuery(
+String msg = client.executeQuery(
     "SELECT msg FROM greetings WHERE id = ?",
     rs -> rs.next() ? rs.getString("msg") : null,
     1);
 
+// Query producing list of strongly typed results
+record KnownMessage(int id, String msg) {};
+List<KnownMessage> msgs = client.executeQuery(
+    "SELECT id, msg FROM greetings WHERE id BETWEEN ? AND ?",
+    rs -> {
+        List<KnownMessage> out = new ArrayList<>();
+        while (rs.next()) {
+            out.add(new KnownMessage(rs.getInt("id"), rs.getString("msg")));
+        }
+        return out;
+    },
+    1, 3);
+
 // Multiple operations on one connection (session = auto-commit per statement)
-db.executeSession(ctx -> {
+client.executeSession(ctx -> {
     int count = ctx.executeQuery("SELECT COUNT(*) FROM greetings", rs -> {
         rs.next(); return rs.getInt(1);
     });
@@ -65,19 +91,43 @@ db.executeSession(ctx -> {
 });
 
 // Atomic block (transaction = commit or rollback together)
-db.executeTransaction(ctx -> {
+client.executeTransaction(ctx -> {
     ctx.executeUpdate("UPDATE accounts SET balance = balance - ? WHERE id = ?", 50, fromId);
     ctx.executeUpdate("UPDATE accounts SET balance = balance + ? WHERE id = ?", 50, toId);
     return null;
 });
 
-// Batch inserts
-db.executeSession(ctx -> {
-    List<Object[]> rows = List.of(new Object[]{"a"}, new Object[]{"b"});
-    ctx.executeBatch("INSERT INTO greetings (msg) VALUES (?)", rows);
-    return null;
+// Batch inserts — atomic operation, use chunked batch for batching over ~500-5k updates.
+List<Object[]> rows = List.of(new Object[]{"a"}, new Object[]{"b"});
+client.executeBatch("INSERT INTO greetings (msg) VALUES (?)", rows);
+
+// Batch inserts using object converter
+record Message(String msg) {};
+List<Message> messages = List.of(new Message("one"), new Message("two"));
+client.executeBatch("INSERT INTO greetings (msg) VALUES (?)", messages, (m, cols) -> cols[0] = m.msg());
+
+// Chunking batches of unbound size
+// — Each chunk is executed in its own transaction for optimal perfomance.
+// — Each chunk is atomic, overall batch is NOT atomic, see javadocs for recovery options.
+// — An object transformer overload exists for this function.
+client.executeChunkedBatch(maxChunkingSize, sql, ...);
+
+// Chunking batches of bound size
+// — Full batch is atomic - all chunks are run within a single transaction.
+// — WARNING: May cause database undo/redo logs to growing indefinitely if used
+//   for extremely large batches — may degrade performance or lead to crashes.
+client.executeTransaction(ctx -> {
+    // ctx.executeChunkedBatch will always execute each chunk in its own transaction for optimal performance.
+    // The first failed chunk throws immediatly, see javadocs for recovery options.
+    // An object transformer overload exists for this function.
+    return ctx.executeChunkedBatch(maxChunkingSize, sql, ...);
 });
+
 ```
+
+> [!TIP]
+> Async variants exist for all execute() operations. \
+> Each SqlClient contains a parallelism bounded virtual thread pool for running async operations.
 
 ### 4. Define migrations
 
@@ -123,6 +173,7 @@ public interface UserRepository extends Repository {
     Optional<User> findById(long id);
 }
 
+@RepositoryImpl(SqlDialect.SQLITE)
 public class UserRepositoryImpl extends AbstractRepository implements UserRepository {
     public UserRepositoryImpl(SqlClient db) {
         super(db);
@@ -168,7 +219,7 @@ registry.register(platform, MyPlugin.class.getClassLoader())
     })
     .onReady(reg -> {
         UserRepository users = reg.get(UserRepository.class);
-        // use repos...
+        // use repos... pass registry to consumers... etc...
     });
 
 // Ready phase — resolves conflicts and runs onReady callbacks.
@@ -187,11 +238,11 @@ private static final UpsertStatement UPSERT = UpsertStatement.builder()
     .build();
 
 // Single upsert
-db.executeUpsert(UPSERT, userId, score, Instant.now());
+client.executeUpsert(UPSERT, userId, score, Instant.now());
 
 // Batch upsert inside a transaction
-db.executeTransaction(ctx -> {
-    ctx.executeBatch(db.sql(UPSERT), rows);
+client.executeTransaction(ctx -> {
+    ctx.executeBatch(client.sql(UPSERT), rows);
     return null;
 });
 ```

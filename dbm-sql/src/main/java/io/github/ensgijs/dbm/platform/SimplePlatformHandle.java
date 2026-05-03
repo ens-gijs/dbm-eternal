@@ -2,6 +2,7 @@ package io.github.ensgijs.dbm.platform;
 
 import org.jetbrains.annotations.NotNull;
 
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -17,6 +18,10 @@ import java.util.List;
  *                     callback ordering during bootstrapping.
  */
 public record SimplePlatformHandle(@NotNull String name, @NotNull List<String> dependencies) implements PlatformHandle {
+
+    public SimplePlatformHandle(@NotNull String name) {
+        this(name, Collections.emptyList());
+    }
 
     public SimplePlatformHandle(@NotNull String name, @NotNull List<String> dependencies) {
         this.name = name;
