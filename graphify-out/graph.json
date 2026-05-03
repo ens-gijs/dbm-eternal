@@ -574,7 +574,7 @@
       "label": "SimplePlatformHandle()",
       "file_type": "code",
       "source_file": "dbm-core\\src\\main\\java\\io\\github\\ensgijs\\dbm\\platform\\SimplePlatformHandle.java",
-      "source_location": "L21",
+      "source_location": "L22",
       "id": "simpleplatformhandle_simpleplatformhandle",
       "community": 4,
       "norm_label": "simpleplatformhandle()"
@@ -583,7 +583,7 @@
       "label": "dependsOn()",
       "file_type": "code",
       "source_file": "dbm-core\\src\\main\\java\\io\\github\\ensgijs\\dbm\\platform\\SimplePlatformHandle.java",
-      "source_location": "L26",
+      "source_location": "L31",
       "id": "simpleplatformhandle_dependson",
       "community": 4,
       "norm_label": "dependson()"
@@ -3739,15 +3739,6 @@
       "norm_label": ".validatenewconfig_cachedincompatiblerepo_throws()"
     },
     {
-      "label": "PaperTestBaseLite.java",
-      "file_type": "code",
-      "source_file": "dbm-platform-paper\\src\\test\\java\\io\\github\\ensgijs\\dbm\\platform\\paper\\testutils\\PaperTestBaseLite.java",
-      "source_location": "L1",
-      "id": "dbm_platform_paper_src_test_java_io_github_ensgijs_dbm_platform_paper_testutils_papertestbaselite_java",
-      "community": 33,
-      "norm_label": "papertestbaselite.java"
-    },
-    {
       "label": "ChunkedBatchExecutionException.java",
       "file_type": "code",
       "source_file": "dbm-sql\\src\\main\\java\\io\\github\\ensgijs\\dbm\\sql\\ChunkedBatchExecutionException.java",
@@ -4014,7 +4005,7 @@
       "source_file": "dbm-sql\\src\\main\\java\\io\\github\\ensgijs\\dbm\\sql\\package-info.java",
       "source_location": "L1",
       "id": "dbm_sql_src_main_java_io_github_ensgijs_dbm_sql_package_info_java",
-      "community": 34,
+      "community": 33,
       "norm_label": "package-info.java"
     },
     {
@@ -7896,7 +7887,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "community": 35,
+      "community": 34,
       "norm_label": "migration package-info",
       "id": "migration_package_info"
     },
@@ -7909,7 +7900,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "community": 36,
+      "community": 35,
       "norm_label": "repository package-info",
       "id": "repository_package_info"
     },
@@ -9862,8 +9853,8 @@
       "source_file": "dbm-core\\src\\main\\java\\io\\github\\ensgijs\\dbm\\repository\\RepositoryRegistry.java",
       "source_location": "L548",
       "weight": 1.0,
-      "_src": "repositoryregistry_repositoryregistry_closeregistration",
-      "_tgt": "platformhandle_platformhandle_name",
+      "_src": "platformhandle_platformhandle_name",
+      "_tgt": "repositoryregistry_repositoryregistry_closeregistration",
       "source": "platformhandle_platformhandle_name",
       "target": "repositoryregistry_repositoryregistry_closeregistration"
     },
@@ -9874,8 +9865,8 @@
       "source_file": "dbm-core\\src\\main\\java\\io\\github\\ensgijs\\dbm\\repository\\RepositoryRegistry.java",
       "source_location": "L832",
       "weight": 1.0,
-      "_src": "repositoryregistry_repositoryregistry_scanplugin",
-      "_tgt": "platformhandle_platformhandle_name",
+      "_src": "platformhandle_platformhandle_name",
+      "_tgt": "repositoryregistry_repositoryregistry_scanplugin",
       "source": "platformhandle_platformhandle_name",
       "target": "repositoryregistry_repositoryregistry_scanplugin"
     },
@@ -9886,8 +9877,8 @@
       "source_file": "dbm-core\\src\\main\\java\\io\\github\\ensgijs\\dbm\\repository\\RepositoryRegistry.java",
       "source_location": "L1375",
       "weight": 1.0,
-      "_src": "repositoryregistry_registrationbootstrappingcontext_requirevalid",
-      "_tgt": "platformhandle_platformhandle_name",
+      "_src": "platformhandle_platformhandle_name",
+      "_tgt": "repositoryregistry_registrationbootstrappingcontext_requirevalid",
       "source": "platformhandle_platformhandle_name",
       "target": "repositoryregistry_registrationbootstrappingcontext_requirevalid"
     },
@@ -9898,8 +9889,8 @@
       "source_file": "dbm-core\\src\\test\\java\\io\\github\\ensgijs\\dbm\\migration\\MigrationLoaderTest.java",
       "source_location": "L117",
       "weight": 1.0,
-      "_src": "migrationloadertest_migrationloadertest_testparsemigrationcontent",
-      "_tgt": "platformhandle_platformhandle_name",
+      "_src": "platformhandle_platformhandle_name",
+      "_tgt": "migrationloadertest_migrationloadertest_testparsemigrationcontent",
       "source": "platformhandle_platformhandle_name",
       "target": "migrationloadertest_migrationloadertest_testparsemigrationcontent"
     },
@@ -9910,8 +9901,8 @@
       "source_file": "dbm-core\\src\\test\\java\\io\\github\\ensgijs\\dbm\\migration\\MigrationLoaderTest.java",
       "source_location": "L139",
       "weight": 1.0,
-      "_src": "migrationloadertest_migrationloadertest_testafterpragmaflexibility",
-      "_tgt": "platformhandle_platformhandle_name",
+      "_src": "platformhandle_platformhandle_name",
+      "_tgt": "migrationloadertest_migrationloadertest_testafterpragmaflexibility",
       "source": "platformhandle_platformhandle_name",
       "target": "migrationloadertest_migrationloadertest_testafterpragmaflexibility"
     },
@@ -9922,8 +9913,8 @@
       "source_file": "dbm-core\\src\\test\\java\\io\\github\\ensgijs\\dbm\\migration\\MigrationLoaderTest.java",
       "source_location": "L157",
       "weight": 1.0,
-      "_src": "migrationloadertest_migrationloadertest_testafterversionscancontaindashesandunderscores",
-      "_tgt": "platformhandle_platformhandle_name",
+      "_src": "platformhandle_platformhandle_name",
+      "_tgt": "migrationloadertest_migrationloadertest_testafterversionscancontaindashesandunderscores",
       "source": "platformhandle_platformhandle_name",
       "target": "migrationloadertest_migrationloadertest_testafterversionscancontaindashesandunderscores"
     },
@@ -9934,8 +9925,8 @@
       "source_file": "dbm-core\\src\\test\\java\\io\\github\\ensgijs\\dbm\\migration\\MigrationLoaderTest.java",
       "source_location": "L213",
       "weight": 1.0,
-      "_src": "migrationloadertest_migrationloadertest_testparsevalidsqlmigration",
-      "_tgt": "platformhandle_platformhandle_name",
+      "_src": "platformhandle_platformhandle_name",
+      "_tgt": "migrationloadertest_migrationloadertest_testparsevalidsqlmigration",
       "source": "platformhandle_platformhandle_name",
       "target": "migrationloadertest_migrationloadertest_testparsevalidsqlmigration"
     },
@@ -9946,8 +9937,8 @@
       "source_file": "dbm-core\\src\\test\\java\\io\\github\\ensgijs\\dbm\\migration\\MigrationLoaderTest.java",
       "source_location": "L261",
       "weight": 1.0,
-      "_src": "migrationloadertest_loadedresourcestests_testloadmigrations",
-      "_tgt": "platformhandle_platformhandle_name",
+      "_src": "platformhandle_platformhandle_name",
+      "_tgt": "migrationloadertest_loadedresourcestests_testloadmigrations",
       "source": "platformhandle_platformhandle_name",
       "target": "migrationloadertest_loadedresourcestests_testloadmigrations"
     },
@@ -9958,8 +9949,8 @@
       "source_file": "dbm-core\\src\\test\\java\\io\\github\\ensgijs\\dbm\\migration\\MigrationSortTest.java",
       "source_location": "L22",
       "weight": 1.0,
-      "_src": "migrationsorttest_migrationsorttest_testcomplexdependencysorting",
-      "_tgt": "platformhandle_platformhandle_name",
+      "_src": "platformhandle_platformhandle_name",
+      "_tgt": "migrationsorttest_migrationsorttest_testcomplexdependencysorting",
       "source": "platformhandle_platformhandle_name",
       "target": "migrationsorttest_migrationsorttest_testcomplexdependencysorting"
     },
@@ -9970,8 +9961,8 @@
       "source_file": "dbm-core\\src\\test\\java\\io\\github\\ensgijs\\dbm\\migration\\MigrationSortTest.java",
       "source_location": "L81",
       "weight": 1.0,
-      "_src": "migrationsorttest_migrationsorttest_testdependencyalwaysprecedesdependent",
-      "_tgt": "platformhandle_platformhandle_name",
+      "_src": "platformhandle_platformhandle_name",
+      "_tgt": "migrationsorttest_migrationsorttest_testdependencyalwaysprecedesdependent",
       "source": "platformhandle_platformhandle_name",
       "target": "migrationsorttest_migrationsorttest_testdependencyalwaysprecedesdependent"
     },
@@ -9982,8 +9973,8 @@
       "source_file": "dbm-core\\src\\test\\java\\io\\github\\ensgijs\\dbm\\repository\\RegistryEndToEndTest.java",
       "source_location": "L42",
       "weight": 1.0,
-      "_src": "registryendtoendtest_registryendtoendtest_e2e_smoketest",
-      "_tgt": "platformhandle_platformhandle_name",
+      "_src": "platformhandle_platformhandle_name",
+      "_tgt": "registryendtoendtest_registryendtoendtest_e2e_smoketest",
       "source": "platformhandle_platformhandle_name",
       "target": "registryendtoendtest_registryendtoendtest_e2e_smoketest"
     },
@@ -10006,8 +9997,8 @@
       "source_file": "dbm-core\\src\\test\\java\\io\\github\\ensgijs\\dbm\\sql\\SqlDatabaseManagerTest.java",
       "source_location": "L42",
       "weight": 1.0,
-      "_src": "sqldatabasemanagertest_sqldatabasemanagertest_setup",
-      "_tgt": "platformhandle_platformhandle_name",
+      "_src": "platformhandle_platformhandle_name",
+      "_tgt": "sqldatabasemanagertest_sqldatabasemanagertest_setup",
       "source": "platformhandle_platformhandle_name",
       "target": "sqldatabasemanagertest_sqldatabasemanagertest_setup"
     },
@@ -10066,8 +10057,8 @@
       "source_file": "dbm-core\\src\\main\\java\\io\\github\\ensgijs\\dbm\\repository\\RepositoryRegistry.java",
       "source_location": "L1311",
       "weight": 1.0,
-      "_src": "repositoryregistry_registrationhelper_compareto",
-      "_tgt": "platformhandle_platformhandle_dependencycomparator",
+      "_src": "platformhandle_platformhandle_dependencycomparator",
+      "_tgt": "repositoryregistry_registrationhelper_compareto",
       "source": "platformhandle_platformhandle_dependencycomparator",
       "target": "repositoryregistry_registrationhelper_compareto"
     },
@@ -10075,7 +10066,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "dbm-core\\src\\main\\java\\io\\github\\ensgijs\\dbm\\platform\\SimplePlatformHandle.java",
-      "source_location": "L21",
+      "source_location": "L26",
       "weight": 1.0,
       "_src": "dbm_core_src_main_java_io_github_ensgijs_dbm_platform_simpleplatformhandle_java",
       "_tgt": "simpleplatformhandle_simpleplatformhandle",
@@ -10087,7 +10078,7 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "dbm-core\\src\\main\\java\\io\\github\\ensgijs\\dbm\\platform\\SimplePlatformHandle.java",
-      "source_location": "L26",
+      "source_location": "L31",
       "weight": 1.0,
       "_src": "dbm_core_src_main_java_io_github_ensgijs_dbm_platform_simpleplatformhandle_java",
       "_tgt": "simpleplatformhandle_dependson",
@@ -10102,8 +10093,8 @@
       "source_file": "dbm-core\\src\\main\\java\\io\\github\\ensgijs\\dbm\\repository\\RepositoryRegistry.java",
       "source_location": "L1160",
       "weight": 1.0,
-      "_src": "repositoryregistry_repositoryregistry_resolvebydependencyorder",
-      "_tgt": "simpleplatformhandle_dependson",
+      "_src": "simpleplatformhandle_dependson",
+      "_tgt": "repositoryregistry_repositoryregistry_resolvebydependencyorder",
       "source": "simpleplatformhandle_dependson",
       "target": "repositoryregistry_repositoryregistry_resolvebydependencyorder"
     },
