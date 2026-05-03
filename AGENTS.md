@@ -6,12 +6,10 @@ Platform-agnostic SQL database management library. Multi-module Gradle project, 
 
 | Module | Purpose | Scoped doc                              |
 |---|---|-----------------------------------------|
-| `dbm-sql` | Core SQL layer: `SqlClient`, connection configs (MySQL/SQLite), batch/upsert helpers, dialects, utilities | [dbm-sql/AGENTS.md](dbm-sql/AGENT.md)   |
-| `dbm-core` | Schema migrations + repository registry, built on `dbm-sql` | [dbm-core/AGENTS.md](dbm-core/AGENT.md) |
-| `dbm-platform-paper` | Paper (Minecraft) integration — **in progress, do not modify without instruction** | —                                       |
-| `dbm-platform-velocity` | Velocity (Minecraft) integration — **in progress, do not modify without instruction** | —                                       |
+| `dbm-sql` | Core SQL layer: `SqlClient`, connection configs (MySQL/SQLite), batch/upsert helpers, dialects, utilities | [dbm-sql/AGENTS.md](dbm-sql/AGENTS.md) |
+| `dbm-core` | Schema migrations + repository registry, built on `dbm-sql` | [dbm-core/AGENTS.md](dbm-core/AGENTS.md) |
 
-`dbm-core` depends on `dbm-sql`. Platform modules are out of scope for current work.
+`dbm-core` depends on `dbm-sql`.
 
 ## Build & Test
 
