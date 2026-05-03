@@ -118,8 +118,6 @@ client.executeChunkedBatch(maxChunkingSize, sql, ...);
 // — WARNING: May cause database undo/redo logs to growing indefinitely if used
 //   for extremely large batches — may degrade performance or lead to crashes.
 client.executeTransaction(ctx -> {
-    // ctx.executeChunkedBatch will always execute each chunk in its own transaction for optimal performance.
-    // The first failed chunk throws immediatly, see javadocs for recovery options.
     // An object transformer overload exists for this function.
     return ctx.executeChunkedBatch(maxChunkingSize, sql, ...);
 });
