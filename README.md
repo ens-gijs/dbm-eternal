@@ -19,11 +19,19 @@ resolves provider conflicts between modules.
 // build.gradle.kts
 dependencies {
     implementation("io.github.ensgijs.dbm:dbm-core:1.0.0-SNAPSHOT")
+
+    // Bring your own JDBC driver(s) — dbm does not pin a version for you.
+    runtimeOnly("com.mysql:mysql-connector-j:9.6.0")     // or org.mariadb.jdbc:mariadb-java-client
+    runtimeOnly("org.xerial:sqlite-jdbc:3.51.3.0")
 }
 ```
 
 `dbm-core` transitively includes `dbm-sql`. Use `dbm-sql` alone if you only need the SQL
 layer without migrations or the repository registry.
+
+HikariCP is exposed on `dbm-sql`'s public API (e.g. `SqlConnectionConfig#configurePool(HikariConfig)`)
+and so is pulled in transitively as an `api` dependency. JDBC drivers are **not** bundled —
+add the driver(s) you need at runtime, at whatever version your environment requires.
 
 ### 2. Configure a connection
 

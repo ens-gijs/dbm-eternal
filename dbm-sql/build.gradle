@@ -12,8 +12,9 @@ repositories {
 dependencies {
     // Uses version defined in: dbm-eternal/gradle/libs.versions.toml
     compileOnly libs.jetbrains.annotations
-    implementation libs.bundles.db.connectivity
+    api libs.hikaricp
     testImplementation libs.bundles.testing
+    testRuntimeOnly libs.bundles.test.drivers
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 

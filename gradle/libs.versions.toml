@@ -22,4 +22,4 @@ sqlite-jdbc = { module = "org.xerial:sqlite-jdbc", version.ref = "sqlite-jdbc" }
 
 [bundles]
 testing = ["junit-jupiter", "mockito-core", "jetbrains-annotations"]
-db-connectivity = ["hikaricp", "mysql", "sqlite-jdbc"]
+test-drivers = ["mysql", "sqlite-jdbc"]

@@ -1,11 +1,11 @@
 # Graph Report - focused-germain-053b51  (2026-05-03)
 
 ## Corpus Check
-- 75 files · ~122,138 words
+- 74 files · ~122,251 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 868 nodes · 2267 edges · 30 communities detected
+- 867 nodes · 2267 edges · 30 communities detected
 - Extraction: 45% EXTRACTED · 55% INFERRED · 0% AMBIGUOUS · INFERRED: 1238 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
@@ -38,8 +38,8 @@
 - [[_COMMUNITY_Community 25|Community 25]]
 - [[_COMMUNITY_Community 26|Community 26]]
 - [[_COMMUNITY_Community 27|Community 27]]
+- [[_COMMUNITY_Community 34|Community 34]]
 - [[_COMMUNITY_Community 35|Community 35]]
-- [[_COMMUNITY_Community 36|Community 36]]
 
 ## God Nodes (most connected - your core abstractions)
 1. `of()` - 45 edges
@@ -193,11 +193,11 @@ Nodes (1): RepositoryNotRegisteredException
 Cohesion: 0.67
 Nodes (1): ExceptionalSupplier
 
-### Community 35 - "Community 35"
+### Community 34 - "Community 34"
 Cohesion: 1.0
 Nodes (1): migration package-info
 
-### Community 36 - "Community 36"
+### Community 35 - "Community 35"
 Cohesion: 1.0
 Nodes (1): repository package-info
 
@@ -232,9 +232,9 @@ Nodes (1): repository package-info
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 - **Thin community `Community 27`** (3 nodes): `ExceptionalSupplier.java`, `ExceptionalSupplier`, `.get()`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 35`** (1 nodes): `migration package-info`
+- **Thin community `Community 34`** (1 nodes): `migration package-info`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
-- **Thin community `Community 36`** (1 nodes): `repository package-info`
+- **Thin community `Community 35`** (1 nodes): `repository package-info`
   Too small to be a meaningful cluster - may be noise or needs more connections extracted.
 
 ## Suggested Questions
