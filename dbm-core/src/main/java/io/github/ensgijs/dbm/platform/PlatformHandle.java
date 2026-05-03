@@ -3,11 +3,10 @@ package io.github.ensgijs.dbm.platform;
 import org.jetbrains.annotations.NotNull;
 
 /**
- * Represents the host environment (e.g., a plugin) that owns a database.
+ * Represents the host environment (e.g., a plugin) participating in a {@code RepositoryRegistry}.
  * <p>
- * Implementors supply a name for logging and pool identification, and optional
- * dependency relationships used by the
- * {@code RepositoryRegistry} to order bootstrap callbacks.
+ * Implementors supply a unique name and optional dependency relationships used by the
+ * registry to order bootstrap callbacks and resolve conflicting bindings.
  * </p>
  *
  * @see SimplePlatformHandle

@@ -7,6 +7,7 @@ Schema migration engine + repository registry. Built on `dbm-sql`. Java 21.
 | Package | Contents |
 |---|---|
 | `io.github.ensgijs.dbm.sql` | `SqlDatabaseManager` — wraps `SqlClient` and binds it to a migration set + repository scope |
+| `io.github.ensgijs.dbm.platform` | `PlatformHandle`, `SimplePlatformHandle` — identifies a plugin / host environment to the `RepositoryRegistry` for callback ordering and binding-conflict resolution. Not used by the SQL layer. |
 | `io.github.ensgijs.dbm.migration` | `Migration` (+ `Migration.Key`, `Migration.MigrationSource`, `Migration.JavaSource`, `Migration.ProgrammaticMigration`), `MigrationLoader`, `SchemaMigrator`, `MigrationParseException` |
 | `io.github.ensgijs.dbm.repository` | `Repository`, `RepositoryApi` (annotation), `RepositoryImpl` (annotation), `AbstractRepository`, `RepositoryRegistry` (+ `RegistrationOptions`, `ConflictMode`, `RegistrationHelper`, `RegistrationBootstrappingContext`), `RepositoryComposition`, `AmbiguousRepositoryApiException`, `RepositoryInitializationException`, `RepositoryNotRegisteredException` |
 

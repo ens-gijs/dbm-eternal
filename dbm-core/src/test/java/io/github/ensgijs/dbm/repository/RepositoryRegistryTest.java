@@ -104,7 +104,6 @@ public class RepositoryRegistryTest {
         pluginA = plugin("AlphaPlugin");
         pluginB = plugin("BetaPlugin", "AlphaPlugin");
         mockManager = mock(SqlDatabaseManager.class);
-        when(mockManager.getPlatformHandle()).thenReturn(pluginA);
         SqlConnectionConfig mockConfig = mock(SqlConnectionConfig.class);
         when(mockConfig.connectionId()).thenReturn("test-db");
         when(mockManager.getSqlConnectionConfig()).thenReturn(mockConfig);

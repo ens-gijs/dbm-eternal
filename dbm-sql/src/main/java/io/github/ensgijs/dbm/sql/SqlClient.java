@@ -7,15 +7,16 @@ import io.github.ensgijs.dbm.util.function.ThrowingFunction;
 import io.github.ensgijs.dbm.util.objects.ConsumableSubscribableEvent;
 import io.github.ensgijs.dbm.util.objects.SubscribableEvent;
 import io.github.ensgijs.dbm.util.threading.LimitedVirtualThreadPerTaskExecutor;
-import io.github.ensgijs.dbm.platform.PlatformHandle;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.annotations.VisibleForTesting;
 
 import java.sql.*;
 import java.util.Collection;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -29,7 +30,10 @@ import java.util.logging.Logger;
  */
 public class SqlClient {
     private final static Logger logger = Logger.getLogger("SqlClient");
-    protected final @NotNull PlatformHandle platformHandle;
+    private static final AtomicLong POOL_INSTANCE_COUNTER = new AtomicLong();
+
+    /// Optional human-readable label included in pool name and {@code toString()}. May be null.
+    protected final @Nullable String label;
     private final ConsumableSubscribableEvent<SqlClient> onBeforePoolResetEvent = new ConsumableSubscribableEvent<>();
     private final ConsumableSubscribableEvent<SqlClient> onAfterPoolResetEvent = new ConsumableSubscribableEvent<>();
     private final ConsumableSubscribableEvent<SqlDialect> onBeforeDialectChangeEvent = new ConsumableSubscribableEvent<>();
@@ -41,32 +45,41 @@ public class SqlClient {
     private volatile CompletableFuture<Boolean> pendingPoolReset;
 
     /**
-     * Initializes the manager and attempts to load the database configuration
-     * from the plugin's default config file.
-     * @param platformHandle The owner of this database manager.
+     * Constructs a new client with no label.
      * @param sqlConnectionConfig {@link SqlConnectionConfig}
      */
-    public SqlClient(@NotNull PlatformHandle platformHandle, @NotNull SqlConnectionConfig sqlConnectionConfig) {
-        this.platformHandle = platformHandle;
+    public SqlClient(@NotNull SqlConnectionConfig sqlConnectionConfig) {
+        this(null, sqlConnectionConfig);
+    }
+
+    /**
+     * @param label An optional human-readable identifier used in pool names and {@code toString()}.
+     *              Pool name uniqueness does not depend on this; uniqueness is guaranteed by an
+     *              instance counter included in {@link #computePoolName(long)}.
+     * @param sqlConnectionConfig {@link SqlConnectionConfig}
+     */
+    public SqlClient(@Nullable String label, @NotNull SqlConnectionConfig sqlConnectionConfig) {
+        this.label = label;
         this.hikariCreator = HikariDataSource::new;
         setSqlConnectionConfig(sqlConnectionConfig);
     }
 
     @VisibleForTesting
     public SqlClient(
-            @NotNull PlatformHandle platformHandle,
+            @Nullable String label,
             @NotNull SqlConnectionConfig sqlConnectionConfig,
             @NotNull Function<@NotNull HikariConfig, HikariDataSource> hikariCreator
     ) {
-        this.platformHandle = platformHandle;
+        this.label = label;
         this.hikariCreator = hikariCreator;
         setSqlConnectionConfig(sqlConnectionConfig);
     }
 
     @Override
     public String toString() {
-        return "SqlClient{" +
-                "owner=" + platformHandle.name() +
+        return getClass().getSimpleName() + "{" +
+                (label != null ? "label=" + label + ", " : "") +
+                "id=" + Objects.toIdentityString(this) +
                 ", dialect=" + activeDialect +
                 ", conn=" + sqlConnectionConfig.connectionId() +
                 '}';
@@ -76,9 +89,9 @@ public class SqlClient {
         return activeDialect;
     }
 
-    /// Gets the {@link PlatformHandle} that owns this manager and the database.
-    public @NotNull PlatformHandle getPlatformHandle() {
-        return platformHandle;
+    /// @return the optional label set at construction time, or null if none.
+    public @Nullable String getLabel() {
+        return label;
     }
 
     /**
@@ -220,6 +233,30 @@ public class SqlClient {
     protected void afterPoolReset() {}
 
     /**
+     * Computes the HikariCP pool name for the next pool that {@link #setupPool()} will create.
+     * <p>
+     * Default format: {@code [<label>::]<identityString>#<poolSeq>::<dialect>::<connectionId>}.
+     * The {@code identityString + "#" + poolSeq} portion guarantees uniqueness across all pools
+     * in this JVM, even when multiple {@code SqlClient} instances share the same configuration
+     * or label. {@code poolSeq} is monotonically incremented per pool creation (including resets),
+     * which makes orphaned/reset pools easy to spot in logs.
+     * </p>
+     * <p>
+     * Subclasses may override to add prefixes (e.g., a platform / plugin name) but should keep
+     * the {@code #poolSeq} component to preserve uniqueness.
+     * </p>
+     *
+     * @param poolSeq A unique-per-JVM sequence number for this pool creation.
+     * @return The pool name to assign to the new HikariCP pool.
+     */
+    protected @NotNull String computePoolName(long poolSeq) {
+        String base = Objects.toIdentityString(this) + "#" + poolSeq
+                + "::" + activeDialect
+                + "::" + sqlConnectionConfig.connectionId();
+        return label != null ? label + "::" + base : base;
+    }
+
+    /**
      * Hook invoked when the connection configuration is about to change, before the pool is reset.
      * The default implementation fires {@link #onBeforeDialectChangeEvent()} when the dialect differs.
      * Subclasses may override to add further validation; they should call {@code super} first.
@@ -287,8 +324,10 @@ public class SqlClient {
             asyncExecutor.setMaxConcurrency(maxConns - 2);
         }
 
-        // e.g. "MyPlugin::MySQL::rot%10.0.50.99/mydb" or "MyPlugin::SQLite::/var/data/mydb.db"
-        String poolName = platformHandle.name() + "::" + activeDialect + "::" + sqlConnectionConfig.connectionId();
+        // e.g. "SqlClient@7a8b3c1d#42::MySQL::rot%10.0.50.99/mydb"
+        // or with a label: "MyPlugin::SqlDatabaseManager@1f3e9c0a#1::SQLite::/var/data/mydb.db"
+        long poolSeq = POOL_INSTANCE_COUNTER.incrementAndGet();
+        String poolName = computePoolName(poolSeq);
 
         hikariConfig.setPoolName(poolName);
         hikariConfig.setConnectionTimeout(TimeUnit.SECONDS.toMillis(30));

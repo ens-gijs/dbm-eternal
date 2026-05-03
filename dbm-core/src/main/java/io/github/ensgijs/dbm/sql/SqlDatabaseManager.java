@@ -4,7 +4,6 @@ import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import io.github.ensgijs.dbm.util.objects.ValueOrException;
 import io.github.ensgijs.dbm.migration.SchemaMigrator;
-import io.github.ensgijs.dbm.platform.PlatformHandle;
 import io.github.ensgijs.dbm.repository.Repository;
 import io.github.ensgijs.dbm.repository.RepositoryComposition;
 import io.github.ensgijs.dbm.repository.RepositoryInitializationException;
@@ -49,24 +48,34 @@ public class SqlDatabaseManager extends SqlClient {
             repositoryCache = new ConcurrentHashMap<>();
 
     /**
+     * Constructs a new manager with no label.
+     *
+     * @param config Database connection configuration.
+     */
+    public SqlDatabaseManager(@NotNull SqlConnectionConfig config) {
+        this(null, config);
+    }
+
+    /**
      * Constructs a new manager.
      *
-     * @param platformHandle The owner of this database manager.
-     * @param config         Database connection configuration.
+     * @param label  Optional human-readable identifier (typically the owning plugin / platform name)
+     *               included in pool names and {@code toString()}; may be {@code null}.
+     * @param config Database connection configuration.
      */
-    public SqlDatabaseManager(@NotNull PlatformHandle platformHandle, @NotNull SqlConnectionConfig config) {
-        super(platformHandle, config);
+    public SqlDatabaseManager(@Nullable String label, @NotNull SqlConnectionConfig config) {
+        super(label, config);
         this.migrator = new SchemaMigrator(this);
     }
 
     @VisibleForTesting
     public SqlDatabaseManager(
-            @NotNull PlatformHandle platformHandle,
+            @Nullable String label,
             @NotNull SqlConnectionConfig config,
             @Nullable SchemaMigrator migrator,
             @NotNull Function<@NotNull HikariConfig, HikariDataSource> hikariCreator
     ) {
-        super(platformHandle, config, hikariCreator);
+        super(label, config, hikariCreator);
         this.migrator = migrator != null ? migrator : new SchemaMigrator(this);
     }
 

@@ -44,8 +44,9 @@ SqlConnectionConfig inMemConfig = SqliteConnectionConfig.inMemory();
 ### 3. Run queries with `SqlClient`
 
 ```java
-PlatformHandle platform = new SimplePlatformHandle("MyApp");
-SqlClient client = new SqlClient(platform, mysqlConfig);
+// Optional label — appears in pool names and toString() to ease log correlation.
+SqlClient client = new SqlClient("MyApp", mysqlConfig);
+// Or, with no label: new SqlClient(mysqlConfig)
 
 // Single updates
 client.executeUpdate("CREATE TABLE IF NOT EXISTS greetings (id INTEGER PRIMARY KEY ASC, msg VARCHAR(64))");
@@ -208,6 +209,7 @@ com.example.myplugin.UserRepositoryImpl
 ### 6. Bootstrap the registry
 
 ```java
+PlatformHandle platform = new SimplePlatformHandle("MyApp");
 RepositoryRegistry registry = new RepositoryRegistry();
 
 // Scanning phase — call once per plugin/module. Scans the given classloader for
