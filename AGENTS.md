@@ -24,7 +24,7 @@ Platform-agnostic SQL database management library. Multi-module Gradle project, 
 - Java toolchain: 21 (set in root `build.gradle`).
 - Custom javadoc tags: `@apiNote`, `@implSpec`, `@implNote`.
 - Dependency versions live in [gradle/libs.versions.toml](gradle/libs.versions.toml). Do not hardcode versions in module `build.gradle` files.
-- Group/version: `io.github.ensgijs.dbm` / `1.0.0-SNAPSHOT` (managed in root `build.gradle`).
+- Maven coordinates: groupId `io.github.ens-gijs.dbm`, version `1.0.0-SNAPSHOT` (managed in root `build.gradle`). The hyphenated groupId matches the verified Central Portal namespace; Java packages are `io.github.ensgijs.dbm` (no hyphen — illegal in Java identifiers). The two are intentionally decoupled.
 
 ## Repository conventions
 

@@ -1,11 +1,15 @@
 plugins {
     id 'java-library'
     // https://vanniktech.github.io/gradle-maven-publish-plugin/central/
-    id 'com.vanniktech.maven.publish' version '0.30.0' apply false
+    id 'com.vanniktech.maven.publish' version '0.36.0' apply false
 }
 
 allprojects {
-    group = 'io.github.ensgijs.dbm'
+    // groupId matches the verified Central Portal namespace `io.github.ens-gijs`
+    // (hyphen mirrors the GitHub username). Java packages stay `io.github.ensgijs`
+    // since hyphens aren't legal in Java identifiers — the two are intentionally
+    // decoupled and that's a normal pattern for hyphenated GitHub usernames.
+    group = 'io.github.ens-gijs.dbm'
     version = '1.0.0-SNAPSHOT'
 
     repositories {
@@ -41,7 +45,10 @@ subprojects {
     // to the Sonatype Central Portal. Credentials & signing keys are read from
     // gradle properties / env vars (see gradle.properties.example).
     mavenPublishing {
-        publishToMavenCentral(com.vanniktech.maven.publish.SonatypeHost.CENTRAL_PORTAL, true)
+        // The SonatypeHost arg was removed in 0.32+; Central Portal is the only host.
+        // Both `publishToMavenCentral` and `publishAndReleaseToMavenCentral` tasks
+        // are exposed regardless — pick the right one in CI vs. local dry-runs.
+        publishToMavenCentral()
         signAllPublications()
 
         coordinates(project.group.toString(), project.name, project.version.toString())
