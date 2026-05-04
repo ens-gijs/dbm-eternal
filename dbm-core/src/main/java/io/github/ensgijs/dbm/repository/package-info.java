@@ -21,7 +21,7 @@
  * <dt>{@link io.github.ensgijs.dbm.repository.RepositoryRegistry}</dt>
  * <dd>Central service-locator (singleton or scoped) managing the bootstrap lifecycle.
  *     During the <em>configure phase</em>, plugins publish provider
- *     {@link io.github.ensgijs.dbm.sql.SqlDatabaseManager} instances.
+ *     {@link io.github.ensgijs.dbm.repository.SqlDatabaseManager} instances.
  *     After {@link io.github.ensgijs.dbm.repository.RepositoryRegistry#closeRegistration()}
  *     completes, repositories are accessible via
  *     {@link io.github.ensgijs.dbm.repository.RepositoryRegistry#get(Class)}.</dd>
@@ -41,7 +41,7 @@
  *     contests are resolved and {@code onReady} callbacks fire on a virtual thread or the
  *     specified {@link java.util.concurrent.Executor}.</li>
  * <li>Repositories are accessed via {@link io.github.ensgijs.dbm.repository.RepositoryRegistry#get(Class)}
- *     or directly from a {@link io.github.ensgijs.dbm.sql.SqlDatabaseManager}.</li>
+ *     or directly from a {@link io.github.ensgijs.dbm.repository.SqlDatabaseManager}.</li>
  * </ol>
  *
  * <h2>Implementation Discovery</h2>

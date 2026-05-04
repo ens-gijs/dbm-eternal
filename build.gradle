@@ -2,6 +2,9 @@ plugins {
     id 'java-library'
     // https://vanniktech.github.io/gradle-maven-publish-plugin/central/
     id 'com.vanniktech.maven.publish' version '0.36.0' apply false
+    // https://github.com/melix/japicmp-gradle-plugin — binary-compatibility check
+    // against the previously published artifact. Currently advisory-only (see below).
+    id 'me.champeau.gradle.japicmp' version '0.4.6' apply false
 }
 
 allprojects {
@@ -10,7 +13,7 @@ allprojects {
     // since hyphens aren't legal in Java identifiers — the two are intentionally
     // decoupled and that's a normal pattern for hyphenated GitHub usernames.
     group = 'io.github.ens-gijs.dbm'
-    version = '1.0.0-SNAPSHOT'
+    version = '0.1.0-SNAPSHOT'
 
     repositories {
         mavenCentral()
@@ -21,9 +24,18 @@ allprojects {
 subprojects {
     apply plugin: 'java-library'
     apply plugin: 'com.vanniktech.maven.publish'
+    apply plugin: 'me.champeau.gradle.japicmp'
 
     java {
         toolchain.languageVersion = JavaLanguageVersion.of(21)
+    }
+
+    // Reproducible artifacts — same source + same deps → byte-identical jars.
+    // Strips file timestamps (which would otherwise embed build-time) and orders
+    // entries deterministically.
+    tasks.withType(AbstractArchiveTask).configureEach {
+        preserveFileTimestamps = false
+        reproducibleFileOrder = true
     }
 
     javadoc {
@@ -83,5 +95,54 @@ subprojects {
                 url = 'https://github.com/ens-gijs/dbm-eternal/issues'
             }
         }
+    }
+
+    // ----------------------------------------------------------------------
+    // Binary-compatibility check via japicmp.
+    //
+    // Compares this build's jar against the previously published version on
+    // Maven Central and reports any incompatible API/ABI changes.
+    //
+    // Behavior by version:
+    //   - 0.x:  baseline lookup is best-effort; failures are warnings only.
+    //           Pre-1.0 you're explicitly allowed to break things.
+    //   - >=1.0: should be flipped to fail the build on incompatibility (see
+    //           the `failOnXxx` flags below) so accidental binary breaks
+    //           require an explicit major-version bump.
+    //
+    // The `previousArtifact` task input is set lazily — it tries the
+    // 'previousVersion' project property if provided (e.g. -PpreviousVersion=0.1.0),
+    // otherwise it skips. Run with: `./gradlew japicmp -PpreviousVersion=<v>`.
+    // ----------------------------------------------------------------------
+    tasks.register('japicmp', me.champeau.gradle.japicmp.JapicmpTask) {
+        description = 'Reports API/ABI changes vs. the previously published version on Maven Central.'
+        group = 'verification'
+
+        def previousVersion = providers.gradleProperty('previousVersion').orNull
+        onlyIf {
+            if (previousVersion == null) {
+                logger.lifecycle("japicmp: skipped — pass -PpreviousVersion=<v> to enable.")
+                return false
+            }
+            return true
+        }
+
+        if (previousVersion != null) {
+            def previous = dependencies.create("${project.group}:${project.name}:${previousVersion}")
+            def previousConfig = configurations.detachedConfiguration(previous)
+            previousConfig.transitive = false
+            oldClasspath.from(previousConfig)
+            newClasspath.from(tasks.named('jar'))
+            newArchives.from(tasks.named('jar'))
+        }
+
+        // 0.x: report-only. Flip these all to `true` at 1.0.0.
+        ignoreMissingClasses = true
+        failOnSourceIncompatibility = false
+        failOnModification = false
+        onlyBinaryIncompatibleModified = true
+
+        htmlOutputFile = layout.buildDirectory.file("reports/japicmp/${project.name}.html").get().asFile
+        txtOutputFile  = layout.buildDirectory.file("reports/japicmp/${project.name}.txt").get().asFile
     }
 }

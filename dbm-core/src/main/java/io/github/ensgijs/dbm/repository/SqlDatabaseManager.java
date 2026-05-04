@@ -1,13 +1,13 @@
-package io.github.ensgijs.dbm.sql;
+package io.github.ensgijs.dbm.repository;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
-import io.github.ensgijs.dbm.util.objects.ValueOrException;
 import io.github.ensgijs.dbm.migration.SchemaMigrator;
-import io.github.ensgijs.dbm.repository.Repository;
-import io.github.ensgijs.dbm.repository.RepositoryComposition;
-import io.github.ensgijs.dbm.repository.RepositoryInitializationException;
-import io.github.ensgijs.dbm.repository.RepositoryRegistry;
+import io.github.ensgijs.dbm.sql.DatabaseException;
+import io.github.ensgijs.dbm.sql.SqlClient;
+import io.github.ensgijs.dbm.sql.SqlConnectionConfig;
+import io.github.ensgijs.dbm.sql.SqlDialect;
+import io.github.ensgijs.dbm.util.objects.ValueOrException;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.annotations.VisibleForTesting;

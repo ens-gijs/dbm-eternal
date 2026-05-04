@@ -24,7 +24,9 @@ Platform-agnostic SQL database management library. Multi-module Gradle project, 
 - Java toolchain: 21 (set in root `build.gradle`).
 - Custom javadoc tags: `@apiNote`, `@implSpec`, `@implNote`.
 - Dependency versions live in [gradle/libs.versions.toml](gradle/libs.versions.toml). Do not hardcode versions in module `build.gradle` files.
-- Maven coordinates: groupId `io.github.ens-gijs.dbm`, version `1.0.0-SNAPSHOT` (managed in root `build.gradle`). The hyphenated groupId matches the verified Central Portal namespace; Java packages are `io.github.ensgijs.dbm` (no hyphen — illegal in Java identifiers). The two are intentionally decoupled.
+- Maven coordinates: groupId `io.github.ens-gijs.dbm`, version `0.1.0-SNAPSHOT` (managed in root `build.gradle`). The hyphenated groupId matches the verified Central Portal namespace; Java packages are `io.github.ensgijs.dbm` (no hyphen — illegal in Java identifiers). The two are intentionally decoupled.
+- JPMS module names (stable; renaming = breaking change for JPMS consumers): `io.github.ensgijs.dbm.sql` and `io.github.ensgijs.dbm.core`.
+- Pre-1.0: `japicmp` is configured advisory-only (run with `./gradlew japicmp -PpreviousVersion=<v>`). At 1.0.0 flip the `failOnXxx` flags to `true` in root `build.gradle` so accidental binary breaks fail CI.
 
 ## Repository conventions
 

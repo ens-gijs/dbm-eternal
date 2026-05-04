@@ -14,7 +14,7 @@
  * </p>
  *
  * <p>
- * The SQL layer ({@code SqlClient} / {@code SqlDatabaseManager}) does not depend on this type;
+ * The SQL layer ({@code SqlClient}) and the repository facade ({@code SqlDatabaseManager}) do not depend on this type;
  * it accepts a plain {@code String label} for pool-name and log identification. Code wiring up
  * a manager from inside a registry callback may forward {@code platformHandle.name()} as that
  * label.

@@ -5,10 +5,8 @@ import io.github.ensgijs.dbm.platform.PlatformHandle;
 import io.github.ensgijs.dbm.platform.SimplePlatformHandle;
 import io.github.ensgijs.dbm.sql.SqlClient;
 import io.github.ensgijs.dbm.sql.SqlConnectionConfig;
-import io.github.ensgijs.dbm.sql.SqlDatabaseManager;
 import io.github.ensgijs.dbm.sql.SqlDialect;
 import io.github.ensgijs.dbm.util.objects.SubscribableEvent;
-import io.github.ensgijs.dbm.util.function.ThrowingBiFunction;
 import io.github.ensgijs.dbm.util.function.ThrowingConsumer;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.*;
@@ -20,7 +18,6 @@ import java.util.Optional;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.BiFunction;
 
 import static io.github.ensgijs.dbm.repository.RepositoryRegistry.*;
 import static io.github.ensgijs.dbm.util.io.ResourceScanner.ResourceEntry;
