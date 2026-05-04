@@ -1,11 +1,15 @@
 plugins {
     id 'java-library'
-    id 'maven-publish'
-    id 'signing'
+    // https://vanniktech.github.io/gradle-maven-publish-plugin/central/
+    id 'com.vanniktech.maven.publish' version '0.36.0' apply false
 }
 
 allprojects {
-    group = 'io.github.ensgijs.dbm'
+    // groupId matches the verified Central Portal namespace `io.github.ens-gijs`
+    // (hyphen mirrors the GitHub username). Java packages stay `io.github.ensgijs`
+    // since hyphens aren't legal in Java identifiers — the two are intentionally
+    // decoupled and that's a normal pattern for hyphenated GitHub usernames.
+    group = 'io.github.ens-gijs.dbm'
     version = '1.0.0-SNAPSHOT'
 
     repositories {
@@ -16,12 +20,9 @@ allprojects {
 
 subprojects {
     apply plugin: 'java-library'
-    apply plugin: 'maven-publish'
-    apply plugin: 'signing'
+    apply plugin: 'com.vanniktech.maven.publish'
 
     java {
-        withJavadocJar()
-        withSourcesJar()
         toolchain.languageVersion = JavaLanguageVersion.of(21)
     }
 
@@ -34,43 +35,53 @@ subprojects {
                     'implSpec:a:Implementation Requirements:',
                     'implNote:a:Implementation Note:'
             )
+            // Don't fail the build on javadoc lint warnings — only on actual errors.
+            addStringOption('Xdoclint:none', '-quiet')
         }
     }
 
-    // Maven Central Requirements
-    publishing {
-        publications {
-            mavenJava(MavenPublication) {
-                from components.java
-                pom {
-                    name = project.name
-                    description = 'A platform-agnostic Database & Repository Manager'
-                    url = 'https://github.com/ensgijs/dbm-eternal'
-                    licenses {
-                        license {
-                            name = 'Apache 2.0'
-                            url = 'https://opensource.org/licenses/apache-2.0'
-                        }
-                    }
-                    developers {
-                        developer {
-                            id = 'ens-gijs'
-                            name = 'Ens Gijs (Ross)'
-                        }
-                    }
-                    scm {
-                        connection = 'scm:git:git://github.com/ens-gijs/dbm-eternal.git'
-                        developerConnection = 'scm:git:ssh://github.com/ens-gijs/dbm-eternal.git'
-                        url = 'https://github.com/ens-gijs/dbm-eternal'
-                    }
+    // Maven Central publishing — handled by the vanniktech plugin.
+    // It auto-creates sources + javadoc jars, signs all artifacts, and uploads
+    // to the Sonatype Central Portal. Credentials & signing keys are read from
+    // gradle properties / env vars (see gradle.properties.example).
+    mavenPublishing {
+        // The SonatypeHost arg was removed in 0.32+; Central Portal is the only host.
+        // Both `publishToMavenCentral` and `publishAndReleaseToMavenCentral` tasks
+        // are exposed regardless — pick the right one in CI vs. local dry-runs.
+        publishToMavenCentral()
+        signAllPublications()
+
+        coordinates(project.group.toString(), project.name, project.version.toString())
+
+        pom {
+            name = project.name
+            description = 'A platform-agnostic Database & Repository Manager'
+            url = 'https://github.com/ens-gijs/dbm-eternal'
+            inceptionYear = '2026'
+
+            licenses {
+                license {
+                    name = 'The Apache License, Version 2.0'
+                    url = 'https://www.apache.org/licenses/LICENSE-2.0.txt'
+                    distribution = 'repo'
                 }
             }
+            developers {
+                developer {
+                    id = 'ens-gijs'
+                    name = 'Ens Gijs (Ross)'
+                    url = 'https://github.com/ens-gijs'
+                }
+            }
+            scm {
+                connection = 'scm:git:https://github.com/ens-gijs/dbm-eternal.git'
+                developerConnection = 'scm:git:ssh://git@github.com/ens-gijs/dbm-eternal.git'
+                url = 'https://github.com/ens-gijs/dbm-eternal'
+            }
+            issueManagement {
+                system = 'GitHub'
+                url = 'https://github.com/ens-gijs/dbm-eternal/issues'
+            }
         }
-    }
-
-    signing {
-        // This makes signing optional for local builds but required for releases
-        required { gradle.taskGraph.hasTask("publish") }
-        sign publishing.publications.mavenJava
     }
 }

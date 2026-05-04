@@ -3,6 +3,14 @@
 .claude/settings.local.json
 CLAUDE.local.md
 
+### Publishing secrets ###
+# Credentials for Sonatype Central Portal + GPG signing live in user-home
+# (~/.gradle/gradle.properties). If you do create a project-local copy, never
+# commit it. See gradle.properties.example for the keys we read.
+/gradle.properties
+secring.gpg
+*.asc
+
 ### Graphify ###
 # keep graph outputs, skip heavy/local-only files
 # optional: commit for shared extraction speed, skip to keep repo small
