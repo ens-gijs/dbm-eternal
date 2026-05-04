@@ -6,6 +6,7 @@ dependencies {
     compileOnly libs.jetbrains.annotations
     implementation libs.hikaricp
     testImplementation libs.bundles.testing
+    testImplementation libs.bundles.test.drivers
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
