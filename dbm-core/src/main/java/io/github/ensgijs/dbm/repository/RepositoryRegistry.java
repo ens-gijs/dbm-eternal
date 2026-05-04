@@ -465,7 +465,7 @@ public final class RepositoryRegistry {
         // Synchronously transition out of ACCEPTING so any concurrent register() call (or capture of
         // a still-accepting state via isAcceptingRegistrations()) sees the closed door immediately.
         state = Lifecycle.CONFIGURING;
-        closeRegistrationFuture = new CompletableFuture<>();
+        final CompletableFuture<Boolean> future = this.closeRegistrationFuture = new CompletableFuture<>();
         final List<RegistrationHelper> registrations = new LinkedList<>(this.pendingRegistrations);
         this.pendingRegistrations = null;
         registrations.sort(null);
@@ -786,12 +786,15 @@ public final class RepositoryRegistry {
                 }
             }
 
-            if (err != null) closeRegistrationFuture.completeExceptionally(err);
-            else closeRegistrationFuture.complete(true);
-            closeRegistrationFuture = null;
+            if (err != null) future.completeExceptionally(err);
+            else future.complete(true);
+            synchronized (this) {
+                if (future == this.closeRegistrationFuture)
+                    this.closeRegistrationFuture = null;
+            }
         });
 
-        return closeRegistrationFuture;
+        return future;
     }
 
     // -----------------------------------------------------------------------
