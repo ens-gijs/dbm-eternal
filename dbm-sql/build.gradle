@@ -1,13 +1,4 @@
-plugins {
-    id 'java'
-}
-
-group = 'io.github.ensgijs.dbm'
-version = '1.0-SNAPSHOT'
-
-repositories {
-    mavenCentral()
-}
+// Group + version are inherited from the root project (build.gradle).
 
 dependencies {
     // Uses version defined in: dbm-eternal/gradle/libs.versions.toml

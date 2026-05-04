@@ -1,16 +1,7 @@
-plugins {
-    id 'java'
-}
-
-group = 'io.github.ensgijs.dbm'
-version = '1.0-SNAPSHOT'
-
-repositories {
-    mavenCentral()
-}
+// Group + version are inherited from the root project (build.gradle).
 
 dependencies {
-    implementation project(':dbm-sql')
+    api project(':dbm-sql')
     // Uses version defined in: dbm-eternal/gradle/libs.versions.toml
     compileOnly libs.jetbrains.annotations
     implementation libs.hikaricp
