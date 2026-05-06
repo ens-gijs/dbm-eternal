@@ -13,7 +13,7 @@ allprojects {
     // since hyphens aren't legal in Java identifiers — the two are intentionally
     // decoupled and that's a normal pattern for hyphenated GitHub usernames.
     group = 'io.github.ens-gijs.dbm'
-    version = '0.1.0'
+    version = '0.2.0-SNAPSHOT'
 
     repositories {
         mavenCentral()

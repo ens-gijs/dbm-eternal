@@ -18,7 +18,7 @@ resolves provider conflicts between modules.
 ```kotlin
 // build.gradle.kts
 dependencies {
-    implementation("io.github.ens-gijs.dbm:dbm-core:0.1.0")
+    implementation("io.github.ens-gijs.dbm:dbm-core:0.2.0-SNAPSHOT")
 
     // Bring your own JDBC driver(s) — dbm does not pin a version for you.
     runtimeOnly("com.mysql:mysql-connector-j:9.6.0")     // or org.mariadb.jdbc:mariadb-java-client
