@@ -81,13 +81,21 @@ Each step is a separate commit so the release can be reverted cleanly if needed.
    ```
    This creates a release from the annotated tag, using the CHANGELOG entry as the body.
 
-3. **Poll Maven Central** for artifact appearance (uses the `loop` skill at a
+3. **Update the `latest` branch** to point to the release tag, and set it as the default branch:
+   ```sh
+   git branch -f latest v<TARGET_VERSION>
+   git push origin latest --force
+   gh repo edit --default-branch latest
+   ```
+   This ensures visitors to the repo on GitHub.com see the latest stable release by default instead of the development master branch.
+
+4. **Poll Maven Central** for artifact appearance (uses the `loop` skill at a
    reasonable cadence — check every 5–10 minutes, not faster). URL:
    `https://repo.maven.apache.org/maven2/io/github/ens-gijs/dbm/dbm-sql/<TARGET_VERSION>/`.
    Initial appearance is typically within ~30 minutes; full search-index
    propagation can take several hours.
 
-4. Tell the user the release is live and link to:
+5. Tell the user the release is live and link to:
    - GitHub release: `https://github.com/ens-gijs/dbm-eternal/releases/tag/v<TARGET_VERSION>`
    - Maven Central: `https://repo.maven.apache.org/maven2/io/github/ens-gijs/dbm/dbm-sql/<TARGET_VERSION>/`
 
