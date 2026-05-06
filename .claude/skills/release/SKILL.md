@@ -16,10 +16,10 @@ publish itself is performed by the `publish.yml` GitHub Actions workflow when a
 
 ## Inputs
 
-If the user did not specify a version, ask before doing anything else:
-- **Target version** (e.g. `0.2.0`). Must be non-SNAPSHOT and follow SemVer.
-- **Next dev version** (default: bump patch and append `-SNAPSHOT`, e.g.
-  `0.2.1-SNAPSHOT`). Confirm with user.
+- **Target version** Identify current working version (e.g. `1.2.0-SNAPSHOT`). Drop -SNAPSHOT suffix and follow SemVer (e.g. `1.2.0`).
+- **Next dev version** (default: bump minor and append `-SNAPSHOT`, e.g. `1.3.0-SNAPSHOT`).
+
+Confirm release version number and next dev version number before proceeding.
 
 ## Pre-flight (run all; abort on any failure)
 
@@ -57,31 +57,21 @@ Each step is a separate commit so the release can be reverted cleanly if needed.
 4. `./gradlew build` — final confidence check.
 5. `git add -A && git commit -m "Release <TARGET_VERSION>"`.
 
-### Commit 2 — Tag and push
+### Commit 2 — Tag, push, wait for publish action, create github release, update `latest` branch
 1. `git tag -a v<TARGET_VERSION> -m "Release <TARGET_VERSION>"`.
 2. **Stop and confirm with user before pushing.** Pushing the tag fires the
    publish workflow and uploads to Maven Central — this is irreversible
    (you can drop a *deployment* in the Central UI, but only before promotion;
    our workflow auto-promotes via `publishAndReleaseToMavenCentral`).
 3. `git push origin master && git push origin v<TARGET_VERSION>`.
-
-### Commit 3 — Resume development
-1. Edit root `build.gradle`: set `version = '<NEXT_DEV_VERSION>'` (with `-SNAPSHOT`).
-2. Edit `README.md` snippet back to `<NEXT_DEV_VERSION>`.
-3. `git add -A && git commit -m "Bump version to <NEXT_DEV_VERSION>"`.
-4. `git push origin master`.
-
-## Post-flight
-
-1. **Wait for publish workflow to complete.** Poll `gh run list --workflow publish.yml --limit 1 --json status,conclusion` until the run shows `status: "completed"` with `conclusion: "success"`. Report the result to the user before proceeding.
-
-2. **Create a GitHub release** from the tag. Once the publish workflow succeeds, run:
+4. **Wait for publish workflow to complete.** Poll `gh run list --workflow publish.yml --limit 1 --json status,conclusion` until the run shows `status: "completed"` with `conclusion: "success"`. Report any failures to the user before proceeding.
+5. **Create a GitHub release** from the tag. Once the publish workflow succeeds, run:
    ```sh
    gh release create v<TARGET_VERSION> --notes-from-tag
    ```
    This creates a release from the annotated tag, using the CHANGELOG entry as the body.
 
-3. **Update the `latest` branch** to point to the release tag, and set it as the default branch:
+6. **Update the `latest` branch** to point to the release tag, and set it as the default branch:
    ```sh
    git branch -f latest v<TARGET_VERSION>
    git push origin latest --force
@@ -89,15 +79,12 @@ Each step is a separate commit so the release can be reverted cleanly if needed.
    ```
    This ensures visitors to the repo on GitHub.com see the latest stable release by default instead of the development master branch.
 
-4. **Poll Maven Central** for artifact appearance (uses the `loop` skill at a
-   reasonable cadence — check every 5–10 minutes, not faster). URL:
-   `https://repo.maven.apache.org/maven2/io/github/ens-gijs/dbm/dbm-sql/<TARGET_VERSION>/`.
-   Initial appearance is typically within ~30 minutes; full search-index
-   propagation can take several hours.
-
-5. Tell the user the release is live and link to:
-   - GitHub release: `https://github.com/ens-gijs/dbm-eternal/releases/tag/v<TARGET_VERSION>`
-   - Maven Central: `https://repo.maven.apache.org/maven2/io/github/ens-gijs/dbm/dbm-sql/<TARGET_VERSION>/`
+### Commit 3 — Resume development
+1. Confirm with the user that everything looks good before proceeding.
+2. Edit root `build.gradle`: set `version = '<NEXT_DEV_VERSION>'` (with `-SNAPSHOT`).
+3. Edit `README.md` snippet back to `<NEXT_DEV_VERSION>`.
+4. `git add -A && git commit -m "Bump version to <NEXT_DEV_VERSION>"`.
+5. `git push origin master`.
 
 ## Things to refuse
 
