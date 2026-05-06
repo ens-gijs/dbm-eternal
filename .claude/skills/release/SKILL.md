@@ -73,15 +73,23 @@ Each step is a separate commit so the release can be reverted cleanly if needed.
 
 ## Post-flight
 
-1. **Watch the CI publish run.** `gh run watch` on the latest workflow.
-2. **Poll Maven Central** for artifact appearance (uses the `loop` skill at a
+1. **Wait for publish workflow to complete.** Poll `gh run list --workflow publish.yml --limit 1 --json status,conclusion` until the run shows `status: "completed"` with `conclusion: "success"`. Report the result to the user before proceeding.
+
+2. **Create a GitHub release** from the tag. Once the publish workflow succeeds, run:
+   ```sh
+   gh release create v<TARGET_VERSION> --notes-from-tag
+   ```
+   This creates a release from the annotated tag, using the CHANGELOG entry as the body.
+
+3. **Poll Maven Central** for artifact appearance (uses the `loop` skill at a
    reasonable cadence — check every 5–10 minutes, not faster). URL:
    `https://repo.maven.apache.org/maven2/io/github/ens-gijs/dbm/dbm-sql/<TARGET_VERSION>/`.
    Initial appearance is typically within ~30 minutes; full search-index
    propagation can take several hours.
-3. **Create a GitHub release** from the tag. `gh release create v<TARGET_VERSION>
-   --notes-from-tag` (or paste the CHANGELOG section as the body).
-4. Tell the user the release is live and link to the Central artifact page.
+
+4. Tell the user the release is live and link to:
+   - GitHub release: `https://github.com/ens-gijs/dbm-eternal/releases/tag/v<TARGET_VERSION>`
+   - Maven Central: `https://repo.maven.apache.org/maven2/io/github/ens-gijs/dbm/dbm-sql/<TARGET_VERSION>/`
 
 ## Things to refuse
 
