@@ -13,7 +13,7 @@ allprojects {
     // since hyphens aren't legal in Java identifiers — the two are intentionally
     // decoupled and that's a normal pattern for hyphenated GitHub usernames.
     group = 'io.github.ens-gijs.dbm'
-    version = '0.1.0-SNAPSHOT'
+    version = '0.1.0'
 
     repositories {
         mavenCentral()
@@ -25,9 +25,23 @@ subprojects {
     apply plugin: 'java-library'
     apply plugin: 'com.vanniktech.maven.publish'
     apply plugin: 'me.champeau.gradle.japicmp'
+    apply plugin: 'signing'
 
     java {
         toolchain.languageVersion = JavaLanguageVersion.of(21)
+    }
+
+    // Configure signing with in-memory GPG key from env vars (only if available)
+    afterEvaluate {
+        def signingKeyId = System.getenv('ORG_GRADLE_PROJECT_mavenCentralSigningInMemoryKeyId')
+        def signingKey = System.getenv('ORG_GRADLE_PROJECT_mavenCentralSigningInMemoryKey')
+        def signingPassword = System.getenv('ORG_GRADLE_PROJECT_mavenCentralSigningInMemoryKeyPassword')
+
+        if (signingKeyId && signingKey && signingPassword) {
+            signing {
+                useInMemoryPgpKeys(signingKeyId, signingKey, signingPassword)
+            }
+        }
     }
 
     // Reproducible artifacts — same source + same deps → byte-identical jars.
